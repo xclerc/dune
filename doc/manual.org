@@ -1,0 +1,363 @@
+This document describe the usage of Jbuilder and specifies its
+metadata format.
+
+* Intro
+
+Jbuilder is a build system for OCaml. It is not intended as a
+completely generic build system that is able to build any given
+project in any language. On the contrary, it makes lots of choices in
+order to encourage a consistent development style.
+
+This scheme is inspired from the one used inside Jane Street and
+adapted to the opam world. It has matured over a long time and is used
+daily by hundred of developpers, which means that it is highly tested
+and productive.
+
+When using Jbuilder, you give very little and high-level information
+to the build system, which in turns takes care of all the low-level
+details, from the compilation of your libraries, executables and
+documentation to the installation, setting up of tests, setting up of
+the devepment tools such as merlin, etc...
+
+In addition to the normal features one would expect from a build
+system for OCaml, Jbuilder provides a few additional ones that detach
+it from the crowd:
+
+- you never need to tell Jbuilder where things such as libraries
+  are. Jbuilder will always discover it automatically. In particular
+  this mean that when you want to re-organize your project you need to
+  do no more than rename your directories, Jbuilder will do the rest
+
+- things always work the same whether your dependencies are local or
+  installed on the system. In particular this mean that you can always
+  drop in the source for a dependency of your project in your working
+  copy and Jbuilder will start using immediately. This makes Jbuilder
+  a great choice for multi-project development
+
+- cross-platform: as long as your code is portable, Jbuilder will be
+  able to cross-compile it automatically
+
+- release directly from any revision: Jbuilder needs no setup
+  stage. To release your project, you can simply point to a specific
+  tag. You can of course add some release steps if you want to, but it
+  is not necessary
+
+The first section of this document defines some terms used in the rest
+of this manual. The second section specifies the Jbuilder metadata
+format and the third one describes how to use the =jbuilder= command.
+
+* Terminology
+
+- *package*: a package is a set of libraries, executables, ... that
+  are built and installed as one by opam
+
+- *project*: project is a source tree, maybe containing one or more
+  packages
+
+- *root*: the root is the directory from where Jbuilder can build
+  things. Jbuilder knows how to build target that are descendant of
+  the root. Anything outside of the tree starting from the root is
+  considered part of the *installed world*
+
+- *workspace*: a workspace is the sub-tree starting from the root. It
+  can contain any number of projects that will be built simultaneously
+  by jbuilder
+
+- *installed world*: anything outside of the workspace, that Jbuilder
+  takes for granted and doesn't know how to build
+
+- *build context*: a build context is a subdirectory of the
+  =<root>/_build= directory. It contains all the build artifacts of
+  the workspace built against a specific configuration. The is always
+  a =default= build context, which correspond to the environemnt in
+  which Jbuilder is executed. Unless a =workspace.sexp= file exists in
+  a parent directory and defines more build contexts, =default= is the
+  only build context available
+
+* Jbuilder project layout
+
+A typical jbuilder project will have a =project.sexp= file at the
+root, and some =jbuild= files in sub-directories, wherever interesting
+things are: libraries, executables, tests, documents to install,
+etc...
+
+It is recommemded to organize your project so that you have exactly
+one library per directory. You can have several executables in the
+same directory, as long as they share the same dependencies.
+
+The rest of these section describe the format of these files.
+
+Note that the Jbuilder metadata format is versionned in order to
+ensure forward compatibilty. Jane Street packages use a special
+=jane_street= version which correspond to a rolling and unstable
+version that follows the internal Jane Street development. You
+shouldn't use this in your project, it is only intended to make the
+publication of Jane Street packages easier.
+
+There is currently only one version available, but to be future proof,
+you should still specify it in your =project.sexp= file. If no version
+is specified, the latest one will be used.
+
+** Metadata format
+
+All configuration files read by Jbuilder are using S-expression
+syntax, which is very simple. Everything is either an atom or a
+list. The exact specification of S-expressions is described in the
+documentation of the [[https://github.com/janestreet/parsexp][parsexp]] library.
+
+Note that the format is completely static. If you have a pattern
+that's repeated a lot, you can use [[https://github.com/janestreet/cinaps][cinaps]] to generate the boilerplate.
+
+** project.sexp
+
+The =project.sexp= file is not mandatory, and you can use Jbuilder
+without one. This is useful for quick testing, but for real projects
+you should have one. It has several purposes:
+
+1. mark the root of your project
+2. list the opam packages defined in your project
+3. define the current version of your packages
+4. define the current revision of the Jbuilder metadata you are using
+
+The scope of a =project.sexp= file is the sub-tree where it lives. A
+=project.sexp= file overrides any ancestor =project.sexp= file. So for
+instance, in the following case:
+
+#+begin_src
+myproject
+|- project.sexp
+|- a/
+   |- jbuild
+|- b/
+   |- project.sexp
+   |- jbuild
+#+end_src
+
+=a/jbuild= is controlled by the toplevel =project.sexp= file, while
+=b/jbuild= is controlled by =b/project.sexp=. This feature allows you
+to drop in a dependency anywhere in your working copy.
+
+*** Specification
+
+The =project.sexp= should is composed of stanzas. For instance a
+typical =project.sexp= looks like:
+
+#+begin_src scheme
+(jbuilder_version 1)
+
+(package
+  ((name core)
+   (version 1.0)))
+#+end_src
+
+The following paragraphs describe the various stanzas available:
+
+**** jbuilder_version
+
+=(jbuilder_version 1)= specifies that we are using the version 1 of
+the Jbuilder metadata format in =project.sexp= and all jbuild files
+controlled by =project.sexp=.
+
+**** package
+
+To declare a package simply write:
+
+#+begin_src scheme
+(package
+  ((name <package-name>)
+   <optional-fields>
+  ))
+#+end_src
+
+=<optional-fields>= are:
+
+- =(version <version-string>)= to specify the version of the
+  package
+
+The version of a given package is determined by trying all these rules
+in order:
+
+- if the package has a =(version ...)= field, use this version
+- if there is a toplevel =(version ...)= stanza in =project.sexp=, use
+  this version
+- if there is a file =VERSION= in the same directory as
+  =project.sexp=, use the first line of this file
+- if there is a file =version= in the same directory as
+  =project.sexp=, use the first line of this file
+
+**** version
+
+=(version <version>)= defines the default version to use for packages
+that don't have a specific =(version ...)= field. In general, projects
+defining multiple packages will use the same version for all their
+packages so you can always just use this.
+
+** jbuild
+
+=jbuild= files are the main part of Jbuilder, and are the origin of
+its name. They are used to describe libraries, executables, tests, and
+everything Jbuilder needs to know about.
+
+*** Specification
+
+Like =project.sexp= files, =jbuild= files are composed of stanzas, as
+described here.
+
+**** library
+
+The library stanza must be used to describe OCaml libraries. The
+format of library stanzas is as follow:
+
+#+begin_src scheme
+(package
+  ((name <library-name>)
+   <optional-fields>
+  ))
+#+end_src
+
+=<library-name>= is the real name of the library. It determines the
+names of the archive files generated for the library as well as the
+module name under which the library will be available, unless
+=(wrapped false)= is used (see below). It must be a valid OCaml module
+name but doesn't need to start with a uppercase letter.
+
+For instance, the modules of a library named =foo= will be available
+as =Foo.XXX= outside of =foo= itself. It is however allowed to write
+an explicit =Foo= module, in which case this will be the interface of
+the library and you are free to expose only the modules you want.
+
+=<optional-fields>= are:
+
+- =(public_name <name>)= this is the name under which the library can
+  be refered as a dependency when it is not part of the current
+  workspace, i.e. when it is installed. Without a =(public_name ...)=
+  field, the library will not be installed by jbuilder. The public
+  name must start by the package name it is part of and optionally
+  followed by a dot and anything else you want. The package name must
+  be one of the package defined in the =project.sexp= file
+
+- =(synopsis <string>)= should give a one-line description of the
+  library. This is used by tools that list installed libraries
+
+- =(modules (<modules>))= specifies what modules are part of the
+  library. By default Jbuilder will use all the .ml files in the same
+  directory as the =jbuild= file. This include ones that are present
+  in the file system as well as ones generated by user rules. You can
+  restrict this list by using a =(modules (<modules>))= field. Each
+  entry in the list is the module name but doesn't need to start with
+  a uppercase letter. For instance: =(modules (config foo))=
+
+- =(libraries (<library-dependencies>))= is used to specifiy the
+  dependencies of the library. In here you should put library
+  names. For library that are present in the workspace, you can use
+  either the real name or the public name. For libraries that are part
+  of the installed world, you need to use the public name. For
+  instance: =(libraries (base re))=. In addition to direct
+  dependencies you can specify alternative dependencies. This is
+  described in the [[Alternative dependencies][alternative dependencies section]]
+
+- =(wrapped <boolean>)= specifies whether the modules of the library
+  should be available only through of the toplevel library module, or
+  should all be exposed at toplevel. The default is =true= and it is
+  highly recommed to keep it this way. Because OCaml toplevel modules
+  must all be unique when linking an executables, polluting the
+  toplevel namespace will make your library unusable with other
+  libraries if there is a module name clash. This option is only
+  intended for libraries that manually prefix all their modules by the
+  library name
+
+- =(preprocess <preprocess-spec>)= specifies how to pre-process files
+  if needed. The default is =no_processing=. Other options are
+  described in the [[Preprocessing specification][preprocessing specification section]]
+
+- =(preprocessor_deps (<deps-conf list>))= specifies extra
+  dependencies of the preprocessor, for instance if the preprocessor
+  reads a generated file. The specification of dependencies is
+  described in the [[Dependency specification][dependency specification section]]
+
+- =(optional)=, if present it indicates that the library should only
+  be built and installed if all the dependencies are available, either
+  in the workspace or in the installed world. You can use this to
+  provide extra features without adding hard dependencies to your
+  project
+
+- =(c_names (<names>))=, if your library has stubs, you must list the
+  C files in this field, without the =.c= extension
+
+- =(install_c_headers (<names>))= if your libraries has public C
+  header files that must be installed, you must list them in this
+  field, with the =.h= extension
+
+- =(modes (<modes>))= modes (=byte= and =native=) which should be
+  built by default. This is only useful when writing libraries for the
+  OCaml toplevel
+
+- =(kind <kind>)= is the kind of the library. The default is =normal=,
+  other available choices are =ppx_rewriter= and
+  =ppx_type_conv_plugin= and must be set when the library is intended
+  to be used as a ppx rewriter or a =[@@deriving ...]= plugin
+
+- =(ppx_runtime_libraries (<library-names>))= when the library is a
+  ppx rewriter or a =[@@deriving ...]= plugin and has runtime
+  dependencies, you can specify them here
+
+- =(virtual_deps (<opam-packages>)=. Sometimes opam packages enable a
+  specific feature only if another package is installed. This is for
+  instance the case of =ctypes= which will only install
+  =ctypes.foreign= if the dummy =ctypes-forein= package is
+  installed. You can specify such virtual dependencies here. You don't
+  need to do so unless you use Jbuilder to synthesize the =depends=
+  and =depopts= sections of your opam file
+
+    # TODO
+    # ; c_flags                  : Ordered_set_lang.Unexpanded.t
+    # ; c_names                  : string list
+    # ; cxx_flags                : Ordered_set_lang.Unexpanded.t
+    # ; cxx_names                : string list
+    # ; includes                 : String_with_vars.t list
+    # ; library_flags            : String_with_vars.t list
+    # ; c_library_flags          : Ordered_set_lang.Unexpanded.t
+    # ; flags                    : Ordered_set_lang.t
+    # ; ocamlc_flags             : Ordered_set_lang.t
+    # ; ocamlopt_flags           : Ordered_set_lang.t
+
+***** Alternative dependencies
+
+It is sometimes the case that one wants to not depend on a specific
+library, but instead on whatever is already installed. For instance to
+use a different backend depending on the target.
+
+Jbuilder allows this by using a =(select ... from ...)= form inside
+the list of library dependencies.
+
+Select forms are specified as follow:
+
+#+begin_src scheme
+(select <target-filename> from
+  ((<literals> -> <filename>)
+   (<literals> -> <filename>)
+   ...))
+#+end_src
+
+=<literals>= are list of literals, where each literal is one of:
+- =<library-name>=, which will evaluate to true if =<library-name>= is
+  available, either in the worksapce either in the installed world
+- =!<library-name>=, which will evaluate to true if =<library-name>=
+  is not availale in the workspace or in the installed world
+
+When evaluating a select form, Jbuilder will create
+=<target-filename>= by copying the file given by the first
+=(<literals> -> <filename>)= case where all the literals evaluate to
+true. It is an error if none of the clauses are selectable. You can
+add a fallback by adding a clause of the form =(-> <file>)= at the end
+of the list.
+
+***** Preprocessing specification
+
+# TODO
+
+***** Dependency specification
+
+# TODO
+
+** Release mode
