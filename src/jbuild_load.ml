@@ -9,6 +9,7 @@ module Jbuilds = struct
 
   type one =
     | Literal of (Path.t * Pkgs.t * Stanza.t list)
+    | Use_meta_lang of script * Sexp.Ast.t list
     | Script of script
 
   type t = one list
@@ -64,8 +65,12 @@ end
 
   let eval jbuilds ~(context : Context.t) =
     let open Future in
+    let env = lazy (Jbuild_meta_lang.Env.make context) in
     List.map jbuilds ~f:(function
       | Literal x -> return x
+      | Use_meta_lang ({ dir; pkgs }, sexps) ->
+        let sexps = Jbuild_meta_lang.expand (Lazy.force env) sexps in
+        return (dir, pkgs, Stanzas.parse pkgs sexps)
       | Script { dir; pkgs = pkgs_ctx } ->
         let file = Path.relative dir "jbuild" in
         let generated_jbuild =
@@ -134,7 +139,16 @@ let load ~dir ~visible_packages ~closest_packages =
   let pkgs = { Pkgs. visible_packages; closest_packages } in
   match Sexp_lexer.Load.many_or_ocaml_script (Path.to_string file) with
   | Sexps sexps ->
-    Jbuilds.Literal (dir, pkgs, Stanzas.parse pkgs sexps)
+    let is_meta_lang : Sexp.Ast.t -> bool = function
+      | List (_, [Atom (_, "use_meta_lang")]) -> true
+      | _ -> false
+    in
+    if List.exists sexps ~f:is_meta_lang then
+      Jbuilds.Use_meta_lang
+        ({ dir; pkgs },
+         sexps)
+    else
+      Jbuilds.Literal (dir, pkgs, Stanzas.parse pkgs sexps)
   | Ocaml_script ->
     Script { dir; pkgs }
 

@@ -33,6 +33,8 @@ val pp_split_strings : Format.formatter -> t -> unit
     "makefile-stuff" are active. *)
 val prepare_formatter : Format.formatter -> unit
 
+val map_atoms : t -> f:(string -> t) -> t
+
 module type Combinators = sig
   type 'a t
   val unit       : unit                      t
