@@ -7,7 +7,7 @@ type t
 val create
   :  contexts:Context.t list
   -> file_tree:File_tree.t
-  -> rules:Build_interpret.Rule.t list
+  -> rules:Build.Rule.t list
   -> t
 
 val is_target : t -> Path.t -> bool

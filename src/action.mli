@@ -61,6 +61,27 @@ val t : Context.t String_map.t -> t Sexp.Of_sexp.t
 val sexp_of_t : t Sexp.To_sexp.t
 val exec : targets:Path.Set.t -> t -> unit Future.t
 
+val make
+  :  context:Context.t
+  -> ?dir:Path.t (* default: Path.root *)
+  -> Mini_shexp.t
+  -> t
+
+val make_context_independant
+  :  ?dir:Path.t (* default: Path.root *)
+  -> Mini_shexp.t
+  -> t
+
+val create_file : Path.t -> t
+val and_create_file : t -> Path.t -> t
+
+(** Create a file with the given contents. Do not ovewrite the file if
+    it hasn't changed. *)
+val update_file : Path.t -> string -> t
+
+(** Write a S-expression to a file *)
+val write_sexp : Path.t -> 'a Sexp.To_sexp.t -> 'a -> t
+
 (* Return a sandboxed version of an action *)
 val sandbox
   :  t

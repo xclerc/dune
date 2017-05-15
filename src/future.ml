@@ -71,6 +71,8 @@ let connect t1 t2 =
 
 let return x = { state = Return x }
 
+let unit = return ()
+
 let sleeping () = { state = Sleep Empty }
 
 let ( >>= ) t f =

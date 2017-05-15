@@ -42,8 +42,8 @@ val cxx_flags : t -> string list
 val expand_var_no_root : t -> string -> string option
 val expand_vars : t -> dir:Path.t -> String_with_vars.t -> string
 
-val add_rule : t -> ?sandbox:bool -> targets:Path.t list -> (unit, Action.t) Build.t -> unit
-val rules : t -> Build_interpret.Rule.t list
+val add_rule : t -> ?sandbox:bool -> targets:Path.t list -> Action.t Build.t -> unit
+val rules : t -> Build.Rule.t list
 
 val sources_and_targets_known_so_far : t -> src_path:Path.t -> String_set.t
 
@@ -59,13 +59,13 @@ val resolve_program
   -> ?hint:string
   -> ?in_the_tree:bool (* default true *)
   -> string
-  -> _ Build.Prog_spec.t
+  -> Path.t Build.t
 
 module Libs : sig
   val find : t -> from:Path.t -> string -> Lib.t option
 
-  val load_requires     : t -> dir:Path.t -> item:string -> (unit, Lib.t list) Build.t
-  val load_runtime_deps : t -> dir:Path.t -> item:string -> (unit, Lib.t list) Build.t
+  val load_requires     : t -> dir:Path.t -> item:string -> Lib.t list Build.t
+  val load_runtime_deps : t -> dir:Path.t -> item:string -> Lib.t list Build.t
 
   val lib_is_available : t -> from:Path.t -> string -> bool
 
@@ -83,7 +83,7 @@ module Libs : sig
     -> libraries:Lib_deps.t
     -> preprocess:Preprocess_map.t
     -> virtual_deps:string list
-    -> (unit, Lib.t list) Build.t * (unit, Lib.t list) Build.t
+    -> Lib.t list Build.t * Lib.t list Build.t
 
   (** Setup the rules for ppx runtime dependencies *)
   val setup_runtime_deps
@@ -98,7 +98,7 @@ end
 
 (** Interpret dependencies written in jbuild files *)
 module Deps : sig
-  val interpret : t -> dir:Path.t -> Dep_conf.t list -> (unit, unit) Build.t
+  val interpret : t -> dir:Path.t -> Dep_conf.t list -> unit Build.t
 
   (** Interpret plain dependencies, replacing other (glob_files, files_recursively_in,
       ...) by None *)
@@ -115,7 +115,7 @@ module Action : sig
     -> targets:Path.t list
     -> deps:Path.t option list
     -> package_context:Pkgs.t
-    -> (unit, Action.t) Build.t
+    -> Action.t Build.t
 end
 
 (** Preprocessing stuff *)
@@ -149,8 +149,8 @@ val expand_and_eval_set
   :  dir:Path.t
   -> Ordered_set_lang.Unexpanded.t
   -> standard:string list
-  -> (unit, string list) Build.t
+  -> string list Build.t
 
 module Pkg_version : sig
-  val set : t -> Package.t -> (unit, string option) Build.t -> (unit, string option) Build.t
+  val set : t -> Package.t -> string option Build.t -> string option Build.t
 end

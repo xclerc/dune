@@ -10,6 +10,8 @@ val (>>|) : 'a t -> ('a -> 'b) -> 'b t
 
 val both : 'a t -> 'b t -> ('a * 'b) t
 
+val unit : unit t
+
 val all : 'a t list -> 'a list t
 val all_unit : unit t list -> unit t
 

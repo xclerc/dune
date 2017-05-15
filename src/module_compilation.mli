@@ -13,7 +13,7 @@ val build_module
   -> dir:Path.t
   -> dep_graph:Ocamldep.dep_graph
   -> modules:Module.t String_map.t
-  -> requires:(unit, Lib.t list) Build.t
+  -> requires:Lib.t list Build.t
   -> alias_module:Module.t option
   -> unit
 
@@ -26,6 +26,6 @@ val build_modules
   -> dir:Path.t
   -> dep_graph:Ocamldep.dep_graph
   -> modules:Module.t String_map.t
-  -> requires:(unit, Lib.t list) Build.t
+  -> requires:Lib.t list Build.t
   -> alias_module:Module.t option
   -> unit

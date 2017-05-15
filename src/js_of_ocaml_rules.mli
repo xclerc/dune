@@ -14,8 +14,8 @@ val build_exe
   -> dir:Path.t
   -> js_of_ocaml:Js_of_ocaml.t
   -> src:Path.t
-  -> requires:(unit, Lib.t list) Build.t
-  -> top_closed_cm_files:(unit, Path.t list) Build.t
+  -> requires:Lib.t list Build.t
+  -> top_closed_cm_files:Path.t list Build.t
   -> unit
 
 val setup_separate_compilation_rules : Super_context.t -> unit

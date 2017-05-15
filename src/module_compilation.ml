@@ -51,18 +51,17 @@ let build_cm sctx ?sandbox ~dynlink ~flags ~cm_kind ~(dep_graph:Ocamldep.dep_gra
       in
       let dep_graph = Ml_kind.Dict.get dep_graph ml_kind in
       let other_cm_files =
-        Build.dyn_paths
-          (dep_graph >>^ (fun dep_graph ->
-             let deps =
-               List.map (Utils.find_deps ~dir dep_graph m.name)
-                 ~f:(Utils.find_module ~dir modules)
-             in
-             List.concat_map
-               deps
-               ~f:(fun m ->
-                 match cm_kind with
-                 | Cmi | Cmo -> [Module.cm_file m ~dir Cmi]
-                 | Cmx -> [Module.cm_file m ~dir Cmi; Module.cm_file m ~dir Cmx])))
+        dep_graph >>| fun dep_graph ->
+        let deps =
+          List.map (Utils.find_deps ~dir dep_graph m.name)
+            ~f:(Utils.find_module ~dir modules)
+        in
+        List.concat_map
+          deps
+          ~f:(fun m ->
+            match cm_kind with
+            | Cmi | Cmo -> [Module.cm_file m ~dir Cmi]
+            | Cmx -> [Module.cm_file m ~dir Cmi; Module.cm_file m ~dir Cmx])
       in
       let extra_targets, cmt_args =
         match cm_kind with
@@ -72,14 +71,14 @@ let build_cm sctx ?sandbox ~dynlink ~flags ~cm_kind ~(dep_graph:Ocamldep.dep_gra
           (fn :: extra_targets, A "-bin-annot")
       in
       SC.add_rule sctx ?sandbox ~targets:(dst :: extra_targets)
-        (Build.paths extra_deps >>>
-         other_cm_files >>>
-         requires >>>
-         Build.dyn_paths (Build.arr (lib_dependencies ~cm_kind)) >>>
-         Build.run ~context:ctx (Dep compiler)
+        (Build.paths extra_deps >>= fun () ->
+         Build.both requires other_cm_files >>= fun (libs, other_cm_files) ->
+         Build.paths other_cm_files >>= fun () ->
+         Build.paths (lib_dependencies ~cm_kind libs) >>= fun () ->
+         Build.run ~context:ctx compiler
            [ Ocaml_flags.get_for_cm flags ~cm_kind
            ; cmt_args
-           ; Dyn Lib.include_flags
+           ; Lib.include_flags libs
            ; As extra_args
            ; if dynlink || cm_kind <> Cmx then As [] else A "-nodynlink"
            ; A "-no-alias-deps"

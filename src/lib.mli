@@ -16,11 +16,11 @@ val header_files : t list -> Path.t list
 
 val include_paths : t list -> Path.Set.t
 
-val include_flags : t list -> _ Arg_spec.t
+val include_flags : t list -> Arg_spec.t
 
-val c_include_flags : t list -> _ Arg_spec.t
+val c_include_flags : t list -> Arg_spec.t
 
-val link_flags : t list -> mode:Mode.t -> _ Arg_spec.t
+val link_flags : t list -> mode:Mode.t -> Arg_spec.t
 
 val archive_files : t list -> mode:Mode.t -> ext_lib:string -> Path.t list
 

@@ -8,7 +8,7 @@ val install : dir:Path.t -> t
 
 val lib_cm_all : dir:Path.t -> string -> Cm_kind.t -> t
 
-val dep : t -> ('a, 'a) Build.t
+val dep : t -> unit Build.t
 val file : t -> Path.t
 
 val file_with_digest_suffix : t -> digest:Digest.t -> Path.t
@@ -26,4 +26,4 @@ val rules
   :  Store.t
   -> prefixes:Path.t list
   -> tree:tree
-  -> Build_interpret.Rule.t list
+  -> Build.Rule.t list

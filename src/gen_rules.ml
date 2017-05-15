@@ -68,29 +68,27 @@ module Gen(P : Params) = struct
            :: match mode with
            | Byte -> []
            | Native -> [lib_archive lib ~dir ~ext:ctx.ext_lib])
-        (Build.fanout
-           (dep_graph >>>
-            Build.arr (fun dep_graph ->
-              Ocamldep.names_to_top_closed_cm_files
-                ~dir
-                ~dep_graph
-                ~modules
-                ~mode
-                (String_map.keys modules)))
+        (Build.both
+           (dep_graph >>| fun dep_graph ->
+            Ocamldep.names_to_top_closed_cm_files
+              ~dir
+              ~dep_graph
+              ~modules
+              ~mode
+              (String_map.keys modules))
            (SC.expand_and_eval_set ~dir lib.c_library_flags ~standard:[])
-         >>>
-         Build.run ~context:ctx (Dep compiler)
+         >>= fun (cm_files, cclibs) ->
+         Build.run ~context:ctx compiler
            [ Ocaml_flags.get flags mode
            ; A "-a"; A "-o"; Path target
            ; As stubs_flags
-           ; Dyn (fun (_, cclibs) ->
-               S (List.map cclibs ~f:(fun flag ->
-                 Arg_spec.S [A "-cclib"; A flag])))
+           ; S (List.map cclibs ~f:(fun flag ->
+               Arg_spec.S [A "-cclib"; A flag]))
            ; As (List.map lib.library_flags ~f:(SC.expand_vars sctx ~dir))
            ; As (match lib.kind with
                | Normal -> []
                | Ppx_deriver | Ppx_rewriter -> ["-linkall"])
-           ; Dyn (fun (cm_files, _) -> Deps cm_files)
+           ; Deps cm_files
            ]))
 
   let mk_lib_cm_all (lib : Library.t) ~dir ~modules cm_kind =
@@ -111,24 +109,22 @@ module Gen(P : Params) = struct
     let dst = Path.relative dir (c_name ^ ctx.ext_obj) in
     SC.add_rule sctx ~targets:[dst]
       (Build.paths h_files
-       >>>
-       Build.fanout
+       >>= fun () ->
+       Build.both
+         requires
          (SC.expand_and_eval_set ~dir lib.c_flags ~standard:(Utils.g ()))
-         (requires
-          >>>
-          Build.dyn_paths (Build.arr Lib.header_files))
-       >>>
+       >>= fun (libs, c_flags) ->
+       Build.paths (Lib.header_files libs)
+       >>= fun () ->
        Build.run ~context:ctx
          (* We have to execute the rule in the library directory as the .o is produced in
             the current directory *)
          ~dir
-         (Dep ctx.ocamlc)
+         ctx.ocamlc
          [ As (Utils.g ())
          ; expand_includes ~dir lib.includes
-         ; Dyn (fun (c_flags, libs) ->
-             S [ Lib.c_include_flags libs
-               ; As (List.concat_map c_flags ~f:(fun f -> ["-ccopt"; f]))
-               ])
+         ; Lib.c_include_flags libs
+         ; As (List.concat_map c_flags ~f:(fun f -> ["-ccopt"; f]))
          ; A "-o"; Path dst
          ; Dep src
          ]);
@@ -139,25 +135,24 @@ module Gen(P : Params) = struct
     let dst = Path.relative dir (c_name ^ ctx.ext_obj) in
     SC.add_rule sctx ~targets:[dst]
       (Build.paths h_files
-       >>>
-       Build.fanout
-         (SC.expand_and_eval_set ~dir lib.cxx_flags ~standard:(Utils.g ()))
+       >>= fun () ->
+       Build.pack3
          requires
-       >>>
+         (SC.expand_and_eval_set ~dir lib.cxx_flags ~standard:(Utils.g ()))
+         (SC.resolve_program sctx ctx.c_compiler
+            (* The C compiler surely is not in the tree *)
+            ~in_the_tree:false)
+       >>= fun (libs, cxx_flags, compiler) ->
        Build.run ~context:ctx
          (* We have to execute the rule in the library directory as the .o is produced in
             the current directory *)
          ~dir
-         (SC.resolve_program sctx ctx.c_compiler
-            (* The C compiler surely is not in the tree *)
-            ~in_the_tree:false)
+         compiler
          [ S [A "-I"; Path ctx.stdlib_dir]
          ; expand_includes ~dir lib.includes
          ; As (SC.cxx_flags sctx)
-         ; Dyn (fun (cxx_flags, libs) ->
-             S [ Lib.c_include_flags libs
-               ; As cxx_flags
-               ])
+         ; Lib.c_include_flags libs
+         ; As cxx_flags
          ; A "-o"; Path dst
          ; A "-c"; Dep src
          ]);
@@ -234,15 +229,15 @@ module Gen(P : Params) = struct
     Option.iter alias_module ~f:(fun m ->
       let target = Path.relative dir m.impl.name in
       SC.add_rule sctx ~targets:[target]
-        (Build.return
+        (Build.return () >>| fun () ->
+         Action.update_file target
            (String_map.values (String_map.remove m.name modules)
             |> List.map ~f:(fun (m : Module.t) ->
               sprintf "(** @canonical %s.%s *)\n\
                        module %s = %s\n"
                 main_module_name m.name
                 m.name (Module.real_unit_name m))
-            |> String.concat ~sep:"\n")
-         >>> Build.update_file_dyn target));
+            |> String.concat ~sep:"\n")));
 
     let requires, real_requires =
       SC.Libs.requires sctx ~dir ~dep_kind ~item:lib.name
@@ -297,15 +292,15 @@ module Gen(P : Params) = struct
         let ocamlmklib ~sandbox ~custom ~targets =
           SC.add_rule sctx ~sandbox ~targets
             (SC.expand_and_eval_set ~dir lib.c_library_flags ~standard:[]
-             >>>
+             >>= fun cclibs ->
              Build.run ~context:ctx
-               (Dep ctx.ocamlmklib)
+               ctx.ocamlmklib
                [ As (Utils.g ())
                ; if custom then A "-custom" else As []
                ; A "-o"
                ; Path (Path.relative dir (sprintf "%s_stubs" lib.name))
                ; Deps o_files
-               ; Dyn (fun cclibs -> As cclibs)
+               ; As cclibs
                ])
         in
         let static = stubs_archive lib ~dir in
@@ -339,7 +334,7 @@ module Gen(P : Params) = struct
         let dst = lib_archive lib ~dir ~ext:".cmxs" in
         let build =
           Build.run ~context:ctx
-            (Dep ocamlopt)
+            ocamlopt
             [ Ocaml_flags.get flags Native
             ; A "-shared"; A "-linkall"
             ; A "-I"; Path dir
@@ -350,7 +345,7 @@ module Gen(P : Params) = struct
         let build =
           if Library.has_stubs lib then
             Build.path (stubs_archive ~dir lib)
-            >>>
+            >>= fun () ->
             build
           else
             build
@@ -385,7 +380,7 @@ module Gen(P : Params) = struct
     let exe = Path.relative dir (name ^ exe_ext) in
     let top_closed_cm_files =
       dep_graph
-      >>^ fun dep_graph ->
+      >>| fun dep_graph ->
       Ocamldep.names_to_top_closed_cm_files
         ~dir
         ~dep_graph
@@ -394,18 +389,17 @@ module Gen(P : Params) = struct
         [String.capitalize_ascii name]
     in
     SC.add_rule sctx ~targets:[exe]
-      (Build.fanout
-        (requires
-         >>> Build.dyn_paths (Build.arr (Lib.archive_files ~mode ~ext_lib:ctx.ext_lib)))
-        top_closed_cm_files
-       >>>
+      (Build.both requires top_closed_cm_files
+       >>= fun (libs, cm_files) ->
+       Build.paths (Lib.archive_files ~mode ~ext_lib:ctx.ext_lib libs)
+       >>= fun () ->
        Build.run ~context:ctx
-         (Dep compiler)
+         compiler
          [ Ocaml_flags.get flags mode
          ; A "-o"; Path exe
          ; As link_flags
-         ; Dyn (fun (libs, _) -> Lib.link_flags libs ~mode)
-         ; Dyn (fun (_, cm_files) -> Deps cm_files)
+         ; Lib.link_flags libs ~mode
+         ; Deps cm_files
          ]);
     if mode = Mode.Byte then
       Js_of_ocaml_rules.build_exe sctx ~dir ~js_of_ocaml ~src:exe
@@ -469,7 +463,7 @@ module Gen(P : Params) = struct
     let targets = List.map rule.targets ~f:(Path.relative dir) in
     SC.add_rule sctx ~targets
       (SC.Deps.interpret sctx ~dir rule.deps
-       >>>
+       >>= fun () ->
        SC.Action.run
          sctx
          rule.action
@@ -499,11 +493,11 @@ module Gen(P : Params) = struct
       (match alias_conf.action with
        | None ->
          deps
-         >>>
-         Build.create_file digest_path
+         >>| fun () ->
+         Action.create_file digest_path
        | Some action ->
          deps
-         >>>
+         >>= fun () ->
          SC.Action.run
            sctx
            action
@@ -512,8 +506,8 @@ module Gen(P : Params) = struct
            ~deps:(SC.Deps.only_plain_files sctx ~dir alias_conf.deps)
            ~targets:[]
            ~package_context
-         >>>
-         Build.and_create_file digest_path)
+         >>| fun action ->
+         Action.and_create_file action digest_path)
 
   (* +-----------------------------------------------------------------+
      | Modules listing                                                 |
@@ -656,35 +650,39 @@ module Gen(P : Params) = struct
       let meta_path = Path.relative path meta_fn in
 
       let version =
-        let get =
-          match pkg.version_from_opam_file with
-          | Some s -> Build.return (Some s)
-          | None ->
-            let candicates =
-              [ pkg.name ^ ".version"
-              ; "version"
-              ; "VERSION"
-              ]
-            in
-            match List.find candicates ~f:(fun fn -> String_set.mem fn files) with
-            | None -> Build.return None
-            | Some fn ->
-              let p = Path.relative path fn in
-              Build.path p
-              >>^ fun () ->
-              match lines_of_file (Path.to_string p) with
-              | ver :: _ -> Some ver
-              | _ -> Some ""
-        in
-        Super_context.Pkg_version.set sctx pkg get
+        Super_context.Pkg_version.set sctx pkg
+          (match pkg.version_from_opam_file with
+           | Some s -> Build.return (Some s)
+           | None ->
+             let rec get candidates =
+               match candidates with
+               | [] -> Build.return None
+               | fn :: rest ->
+                 let path = Path.relative path fn in
+                 Build.file_exists path >>= function
+                 | false -> get rest
+                 | true ->
+                   Build.lines_of path
+                   >>| function
+                   | Ok (ver :: _) -> Some ver
+                   | _ -> Some ""
+             in
+             get
+               [ pkg.name ^ ".version"
+               ; "version"
+               ; "VERSION"
+               ])
       in
 
       let template =
+        let default = ["# JBUILDER_GEN"] in
         if has_meta_tmpl then
           let meta_templ_path = Path.relative pkg.path meta_templ_fn in
-          Build.lines_of meta_templ_path
+          Build.lines_of meta_templ_path >>| function
+          | Ok x -> x
+          | Not_building -> default
         else
-          Build.return ["# JBUILDER_GEN"]
+          Build.return default
       in
       let meta =
         Gen_meta.gen ~package:pkg.name
@@ -693,29 +691,20 @@ module Gen(P : Params) = struct
           ~lib_deps:(fun ~dir jbuild ->
             match jbuild with
             | Library lib ->
-              Build.arr ignore
-              >>>
               SC.Libs.load_requires sctx ~dir ~item:lib.name
-              >>^ List.map ~f:Lib.best_name
-            | Executables exes ->
-              let item = List.hd exes.names in
-              Build.arr ignore
-              >>>
-              SC.Libs.load_requires sctx ~dir ~item
-              >>^ List.map ~f:Lib.best_name
-            | _ -> Build.arr (fun _ -> []))
+              >>| List.map ~f:Lib.best_name
+            | _ -> Build.return [])
           ~ppx_runtime_deps:(fun ~dir jbuild ->
             match jbuild with
             | Library lib ->
-              Build.arr ignore
-              >>>
               SC.Libs.load_runtime_deps sctx ~dir ~item:lib.name
-              >>^ List.map ~f:Lib.best_name
-            | _ -> Build.arr (fun _ -> []))
+              >>| List.map ~f:Lib.best_name
+            | _ -> Build.return [])
       in
       SC.add_rule sctx ~targets:[meta_path]
-        (Build.fanout meta template
-         >>^ (fun ((meta : Meta.t), template) ->
+        (Build.both meta template
+         >>| fun ((meta : Meta.t), template) ->
+         let s =
            let buf = Buffer.create 1024 in
            let ppf = Format.formatter_of_buffer buf in
            Format.pp_open_vbox ppf 0;
@@ -731,9 +720,9 @@ module Gen(P : Params) = struct
                Format.fprintf ppf "%s@," s);
            Format.pp_close_box ppf ();
            Format.pp_print_flush ppf ();
-           Buffer.contents buf)
-         >>>
-         Build.update_file_dyn meta_path);
+           Buffer.contents buf
+         in
+         Action.update_file meta_path s);
 
       if has_meta || has_meta_tmpl then
         Some pkg.name
@@ -874,13 +863,13 @@ module Gen(P : Params) = struct
     let entries = local_install_rules entries ~package in
     SC.add_rule sctx ~targets:[fn]
       (Build.path_set (Install.files entries)
-       >>^ (fun () ->
-         Install.gen_install_file entries)
-       >>>
-       Build.update_file_dyn fn)
+       >>| fun () ->
+       Action.update_file fn
+         (Install.gen_install_file entries))
 
-  let () = String_map.iter (SC.packages sctx) ~f:(fun ~key:_ ~data:pkg ->
-    install_file pkg.Package.path pkg.name)
+  let () =
+    String_map.iter (SC.packages sctx) ~f:(fun ~key:_ ~data:pkg ->
+      install_file pkg.Package.path pkg.name)
 
   let () =
     let is_default = Path.basename ctx.build_dir = "default" in

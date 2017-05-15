@@ -3,7 +3,7 @@ open Build.O
 
 module SC = Super_context
 
-type dep_graph = (unit, string list String_map.t) Build.t Ml_kind.Dict.t
+type dep_graph = string list String_map.t Build.t Ml_kind.Dict.t
 
 let parse_deps ~dir lines ~modules ~alias_module =
   List.map lines ~f:(fun line ->
@@ -60,11 +60,13 @@ let rules sctx ~ml_kind ~dir ~item ~modules ~alias_module =
   in
   let ctx = SC.context sctx in
   SC.add_rule sctx ~targets:[ocamldep_output]
-    (Build.run ~context:ctx (Dep ctx.ocamldep) [A "-modules"; S files]
+    (Build.run ~context:ctx ctx.ocamldep [A "-modules"; S files]
        ~stdout_to:ocamldep_output);
   Build.memoize ~name:(Path.to_string ocamldep_output)
     (Build.lines_of ocamldep_output
-     >>^ parse_deps ~dir ~modules ~alias_module)
+     >>| function
+     | Ok l -> parse_deps ~dir ~modules ~alias_module l
+     | Not_building -> String_map.map modules ~f:(fun _ -> []))
 
 module Dep_closure =
   Top_closure.Make(String)(struct

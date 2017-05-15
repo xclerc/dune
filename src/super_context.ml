@@ -18,7 +18,7 @@ type t =
   ; aliases                                 : Alias.Store.t
   ; file_tree                               : File_tree.t
   ; artifacts                               : Artifacts.t
-  ; mutable rules                           : Build_interpret.Rule.t list
+  ; mutable rules                           : Build.Rule.t list
   ; stanzas_to_consider_for_install         : (Path.t * Stanza.t) list
   ; mutable known_targets_by_src_dir_so_far : String_set.t Path.Map.t
   ; cxx_flags                               : string list
@@ -46,8 +46,9 @@ let expand_vars t ~dir s =
 
 let resolve_program t ?hint ?(in_the_tree=true) bin =
   match Artifacts.binary t.artifacts ?hint ~in_the_tree bin with
-  | Error fail -> Build.Prog_spec.Dyn (fun _ -> fail.fail ())
-  | Ok    path -> Build.Prog_spec.Dep path
+  | Ok    path -> Build.return path
+  | Error fail ->
+    Build.map (Build.fail fail) ~f:(fun () -> Path.absolute ("/not-found/" ^ bin))
 
 let create
       ~(context:Context.t)
@@ -154,7 +155,7 @@ let create
   }
 
 let add_rule t ?sandbox ~targets build =
-  let rule = Build_interpret.Rule.make ?sandbox ~targets build in
+  let rule = Build.Rule.make ?sandbox ~targets build in
   t.rules <- rule :: t.rules;
   t.known_targets_by_src_dir_so_far <-
     Path.Set.fold rule.targets ~init:t.known_targets_by_src_dir_so_far
@@ -195,6 +196,9 @@ module Libs = struct
     Build.read_sexp fn (fun sexp ->
       Sexp.Of_sexp.(list string) sexp
       |> List.map ~f:(fun name -> Lib_db.find_exn t.libs ~from:dir name))
+    >>| function
+    | Ok x -> x
+    | Not_building -> []
 
   let load_requires t ~dir ~item =
     load_deps t ~dir (requires_file ~dir ~item)
@@ -208,43 +212,43 @@ module Libs = struct
   let with_fail ~fail build =
     match fail with
     | None -> build
-    | Some f -> Build.fail f >>> build
+    | Some f -> Build.fail f >>= fun () -> build
 
   let closure t ~dir ~dep_kind lib_deps =
     let internals, externals, fail = Lib_db.interpret_lib_deps t.libs ~dir lib_deps in
     with_fail ~fail
       (Build.record_lib_deps ~dir ~kind:dep_kind lib_deps
-       >>>
+       >>= fun () ->
        Build.all
          (List.map internals ~f:(fun ((dir, lib) : Lib.Internal.t) ->
             load_requires t ~dir ~item:lib.name))
-       >>^ (fun internal_deps ->
-         let externals =
-           Findlib.closure externals
-             ~required_by:dir
-             ~local_public_libs:(local_public_libs t.libs)
-           |> List.map ~f:(fun pkg -> Lib.External pkg)
-         in
-         Lib.remove_dups_preserve_order
-           (List.concat (externals :: internal_deps) @
-            List.map internals ~f:(fun x -> Lib.Internal x))))
+       >>| fun internal_deps ->
+       let externals =
+         Findlib.closure externals
+           ~required_by:dir
+           ~local_public_libs:(local_public_libs t.libs)
+         |> List.map ~f:(fun pkg -> Lib.External pkg)
+       in
+       Lib.remove_dups_preserve_order
+         (List.concat (externals :: internal_deps) @
+          List.map internals ~f:(fun x -> Lib.Internal x)))
 
   let closed_ppx_runtime_deps_of t ~dir ~dep_kind lib_deps =
     let internals, externals, fail = Lib_db.interpret_lib_deps t.libs ~dir lib_deps in
     with_fail ~fail
       (Build.record_lib_deps ~dir ~kind:dep_kind lib_deps
-       >>>
+       >>= fun () ->
        Build.all
          (List.map internals ~f:(fun ((dir, lib) : Lib.Internal.t) ->
             load_runtime_deps t ~dir ~item:lib.name))
-       >>^ (fun libs ->
-         let externals =
-           Findlib.closed_ppx_runtime_deps_of externals
-             ~required_by:dir
-             ~local_public_libs:(local_public_libs t.libs)
-           |> List.map ~f:(fun pkg -> Lib.External pkg)
-         in
-         Lib.remove_dups_preserve_order (List.concat (externals :: libs))))
+       >>| fun libs ->
+       let externals =
+         Findlib.closed_ppx_runtime_deps_of externals
+           ~required_by:dir
+           ~local_public_libs:(local_public_libs t.libs)
+         |> List.map ~f:(fun pkg -> Lib.External pkg)
+       in
+       Lib.remove_dups_preserve_order (List.concat (externals :: libs)))
 
   let lib_is_available t ~from name = lib_is_available t.libs ~from name
 
@@ -253,13 +257,10 @@ module Libs = struct
       let src = Path.relative dir src_fn in
       let dst = Path.relative dir dst_fn in
       add_rule t ~targets:[dst]
-        (Build.path src
-         >>>
-         Build.action_context_independent
-           (Copy_and_add_line_directive (src, dst))))
+        (Build.copy_and_add_line_directive ~src ~dst))
 
   let write_deps fn =
-    Build.write_sexp fn (fun l -> Sexp.To_sexp.(list string) (List.map l ~f:Lib.best_name))
+    Action.write_sexp fn (fun l -> Sexp.To_sexp.(list string) (List.map l ~f:Lib.best_name))
 
   let real_requires t ~dir ~dep_kind ~item ~libraries ~preprocess ~virtual_deps =
     let all_pps =
@@ -268,16 +269,14 @@ module Libs = struct
     let requires_file = requires_file ~dir ~item in
     add_rule t ~targets:[requires_file]
       (Build.record_lib_deps ~dir ~kind:dep_kind (List.map virtual_deps ~f:Lib_dep.direct)
-       >>>
-       Build.fanout
+       >>= fun () ->
+       Build.both
          (closure t ~dir ~dep_kind libraries)
          (closed_ppx_runtime_deps_of t ~dir ~dep_kind
             (List.map all_pps ~f:Lib_dep.direct))
-       >>>
-       Build.arr (fun (libs, rt_deps) ->
-         Lib.remove_dups_preserve_order (libs @ rt_deps))
-       >>>
-       write_deps requires_file);
+       >>| fun (libs, rt_deps) ->
+       write_deps requires_file
+         (Lib.remove_dups_preserve_order (libs @ rt_deps)));
     load_deps t ~dir requires_file
 
   let requires t ~dir ~dep_kind ~item ~libraries ~preprocess ~virtual_deps =
@@ -294,7 +293,7 @@ module Libs = struct
            changes. Maybe one day we should add [Build.path_exists] to do the same in
            general. *)
         Build.path (Path.relative dir ".merlin-exists")
-        >>>
+        >>= fun () ->
         real_requires
       else
         real_requires
@@ -304,14 +303,12 @@ module Libs = struct
   let setup_runtime_deps t ~dir ~dep_kind ~item ~libraries ~ppx_runtime_libraries =
     let runtime_deps_file = runtime_deps_file ~dir ~item in
     add_rule t ~targets:[runtime_deps_file]
-      (Build.fanout
+      (Build.both
          (closure t ~dir ~dep_kind (List.map ppx_runtime_libraries ~f:Lib_dep.direct))
          (closed_ppx_runtime_deps_of t ~dir ~dep_kind libraries)
-       >>>
-       Build.arr (fun (rt_deps, rt_deps_of_deps) ->
-         Lib.remove_dups_preserve_order (rt_deps @ rt_deps_of_deps))
-       >>>
-       write_deps runtime_deps_file)
+       >>| fun (rt_deps, rt_deps_of_deps) ->
+       write_deps runtime_deps_file
+         (Lib.remove_dups_preserve_order (rt_deps @ rt_deps_of_deps)))
 end
 
 module Deps = struct
@@ -327,7 +324,9 @@ module Deps = struct
         let s = Path.basename path in
         match Glob_lexer.parse_string s with
         | Ok re ->
-          Build.paths_glob ~dir (Re.compile re)
+          Build.eval_glob ~dir (Re.compile re)
+          >>=
+          Build.path_set
         | Error (_pos, msg) ->
           die "invalid glob in %s/jbuild: %s" (Path.to_string dir) msg
       end
@@ -339,7 +338,7 @@ module Deps = struct
     let rec loop acc = function
       | [] -> acc
       | d :: l ->
-        loop (acc >>> dep t ~dir d) l
+        loop (acc >>= fun () -> dep t ~dir d) l
     in
     loop (Build.return ()) l
 
@@ -359,13 +358,18 @@ module Pkg_version = struct
     Path.relative (Path.append sctx.context.build_dir p.path)
       (sprintf "%s.version.sexp" p.name)
 
-  let read sctx p = Build.read_sexp (spec_file sctx p) Sexp.Of_sexp.(option string)
+  let read sctx p =
+    Build.read_sexp (spec_file sctx p) Sexp.Of_sexp.(option string) >>| function
+    | Ok x -> x
+    | Not_building -> None
 
   let set sctx p get =
     let fn = spec_file sctx p in
     add_rule sctx ~targets:[fn]
-      (get >>> Build.write_sexp fn Sexp.To_sexp.(option string));
-    Build.read_sexp fn Sexp.Of_sexp.(option string)
+      (get >>| Action.write_sexp fn Sexp.To_sexp.(option string));
+    Build.read_sexp fn Sexp.Of_sexp.(option string) >>| function
+    | Ok x -> x
+    | Not_building -> None
 end
 
 module Action = struct
@@ -379,7 +383,7 @@ module Action = struct
       failures  : fail list
     ; (* All "name" for ${lib:name:...}/${lib-available:name} forms *)
       lib_deps  : Build.lib_deps
-    ; vdeps     : (unit, Action.var_expansion) Build.t String_map.t
+    ; vdeps     : Action.var_expansion Build.t String_map.t
     }
 
   let add_artifact ?lib_dep acc ~var result =
@@ -436,7 +440,7 @@ module Action = struct
           match Pkgs.resolve package_context s with
           | Ok p ->
             let x =
-              Pkg_version.read sctx p >>^ function
+              Pkg_version.read sctx p >>| function
               | None -> Action.Str ""
               | Some s -> Str s
             in
@@ -472,7 +476,7 @@ module Action = struct
     let forms = extract_artifacts sctx ~dir ~dep_kind ~package_context t in
     let build =
       Build.record_lib_deps_simple ~dir forms.lib_deps
-      >>>
+      >>= fun () ->
       Build.path_set
         (String_map.fold forms.artifacts ~init:Path.Set.empty
            ~f:(fun ~key:_ ~data:exp acc ->
@@ -480,22 +484,21 @@ module Action = struct
              | Action.Path p -> Path.Set.add p acc
              | Paths ps -> Path.Set.union acc (Path.Set.of_list ps)
              | Not_found | Str _ -> acc))
-      >>>
+      >>= fun () ->
       let vdeps = String_map.bindings forms.vdeps in
       Build.all (List.map vdeps ~f:snd)
-      >>^ (fun vals ->
-        let artifacts =
-          List.fold_left2 vdeps vals ~init:forms.artifacts ~f:(fun acc (var, _) value ->
-            String_map.add acc ~key:var ~data:value)
-        in
-        U.expand sctx.context dir t
-          ~f:(expand_var sctx ~artifacts ~targets ~deps))
-      >>>
-      Build.action_dyn () ~context:sctx.context ~dir
+      >>| fun vals ->
+      let artifacts =
+        List.fold_left2 vdeps vals ~init:forms.artifacts ~f:(fun acc (var, _) value ->
+          String_map.add acc ~key:var ~data:value)
+      in
+      Action.make ~context:sctx.context ~dir
+        (U.expand sctx.context dir t
+           ~f:(expand_var sctx ~artifacts ~targets ~deps))
     in
     match forms.failures with
     | [] -> build
-    | fail :: _ -> Build.fail fail >>> build
+    | fail :: _ -> Build.fail fail >>= fun () -> build
 end
 
 module PP = struct
@@ -538,7 +541,7 @@ module PP = struct
       match driver with
       | None -> libs
       | Some driver ->
-        libs >>^ fun libs ->
+        libs >>| fun libs ->
         let is_driver name = name = driver || name = migrate_driver_main in
         let libs, drivers =
           List.partition_map libs ~f:(fun lib ->
@@ -575,19 +578,19 @@ module PP = struct
                Hint: opam install ocaml-migrate-parsetree"
             migrate_driver_main
         }
-        >>>
+        >>= fun () ->
         libs
       | Some _ ->
         libs
     in
     add_rule sctx ~targets:[target]
       (libs
-       >>>
-       Build.dyn_paths (Build.arr (Lib.archive_files ~mode ~ext_lib:ctx.ext_lib))
-       >>>
-       Build.run ~context:ctx (Dep compiler)
+       >>= fun libs ->
+       Build.paths (Lib.archive_files ~mode ~ext_lib:ctx.ext_lib libs)
+       >>= fun () ->
+       Build.run ~context:ctx compiler
          [ A "-o" ; Path target
-         ; Dyn (Lib.link_flags ~mode)
+         ; Lib.link_flags ~mode libs
          ])
 
   let get_ppx_driver sctx pps ~dir ~dep_kind =
@@ -628,7 +631,8 @@ module PP = struct
       let src_path = Path.relative dir src in
       let target = Path.relative dir target in
       add_rule sctx ~targets:[target]
-        (Build.run ~context:ctx refmt
+        (refmt >>= fun bin ->
+         Build.run ~context:ctx bin
            [ A "--print"
            ; A "binary"
            ; Dep src_path ]
@@ -666,9 +670,9 @@ module PP = struct
         pped_module m ~dir ~f:(fun _kind src dst ->
           add_rule sctx ~targets:[dst]
             (preprocessor_deps
-             >>>
+             >>= fun () ->
              Build.path src
-             >>>
+             >>= fun () ->
              Action.run sctx
                (Redirect
                   (Stdout,
@@ -685,9 +689,9 @@ module PP = struct
         pped_module m ~dir ~f:(fun kind src dst ->
           add_rule sctx ~targets:[dst]
             (preprocessor_deps
-             >>>
+             >>= fun () ->
              Build.run ~context:sctx.context
-               (Dep ppx_exe)
+               ppx_exe
                [ As flags
                ; A "--dump-ast"
                ; As (cookie_library_name lib_name)
@@ -707,12 +711,11 @@ let expand_and_eval_set ~dir set ~standard =
   | files ->
     let paths = List.map files ~f:(Path.relative dir) in
     Build.paths paths
-    >>>
-    Build.arr (fun () ->
-      let files_contents =
-        List.map2 files paths ~f:(fun fn path ->
-          (fn, Sexp_load.single (Path.to_string path)))
-        |> String_map.of_alist_exn
-      in
-      let set = Ordered_set_lang.Unexpanded.expand set ~files_contents in
-      Ordered_set_lang.eval_with_standard set ~standard)
+    >>| fun () ->
+    let files_contents =
+      List.map2 files paths ~f:(fun fn path ->
+        (fn, Sexp_load.single (Path.to_string path)))
+      |> String_map.of_alist_exn
+    in
+    let set = Ordered_set_lang.Unexpanded.expand set ~files_contents in
+    Ordered_set_lang.eval_with_standard set ~standard

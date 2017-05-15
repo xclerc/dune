@@ -134,20 +134,19 @@ let gen ~package ~version ~stanzas ~lib_deps ~ppx_runtime_deps =
       | _ ->
         None)
   in
-  (version >>^ function
+  (version >>| function
    | None -> []
    | Some s -> [rule "version" [] Set s])
-  >>>
+  >>= fun version ->
   Build.all
     (List.map items ~f:(fun (Lib (dir, pub_name, lib)) ->
-         Build.fanout3
-           (Build.arr (fun x -> x))
-           (lib_deps ~dir         (Stanza.Library lib))
-           (ppx_runtime_deps ~dir (Stanza.Library lib))
-         >>^ fun (version, lib_deps, ppx_runtime_deps) ->
-         (pub_name,
-          gen_lib pub_name lib ~lib_deps ~ppx_runtime_deps ~version)))
-  >>^ fun pkgs ->
+       Build.both
+         (lib_deps ~dir         (Stanza.Library lib))
+         (ppx_runtime_deps ~dir (Stanza.Library lib))
+       >>| fun (lib_deps, ppx_runtime_deps) ->
+       (pub_name,
+        gen_lib pub_name lib ~lib_deps ~ppx_runtime_deps ~version)))
+  >>| fun pkgs ->
   let pkgs =
     List.map pkgs ~f:(fun (pn, meta) ->
       match Pub_name.to_list pn with

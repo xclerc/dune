@@ -2,7 +2,7 @@
 
 open Import
 
-type dep_graph = (unit, string list String_map.t) Build.t Ml_kind.Dict.t
+type dep_graph = string list String_map.t Build.t Ml_kind.Dict.t
 
 (** Generate ocamldep rules for the given modules. [item] is either the internal name of a
     library of the first name of a list of executables.

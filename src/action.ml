@@ -435,6 +435,22 @@ let exec ~targets { action; dir; context } =
   Mini_shexp.exec action ~purpose ~dir ~env ~env_extra:Env_var_map.empty
     ~stdout_to:None ~stderr_to:None
 
+let make ~context ?(dir=context.Context.build_dir) action =
+  { context = Some context; dir; action }
+
+let make_context_independant ?(dir=Path.root) action =
+  { context = None; dir; action }
+
+let create_file fn = make_context_independant (Create_file fn)
+
+let and_create_file t fn =
+  { t with action = Progn [t.action; Create_file fn] }
+
+let update_file fn s = make_context_independant (Update_file (fn, s))
+
+let write_sexp fn to_sexp x =
+  update_file fn (Sexp.to_string (to_sexp x))
+
 let sandbox t ~sandboxed ~deps ~targets =
   let action =
     let module M = Mini_shexp.Ast in

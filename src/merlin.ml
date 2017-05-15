@@ -4,7 +4,7 @@ open Build.O
 module SC = Super_context
 
 type t =
-  { requires   : (unit, Lib.t list) Build.t
+  { requires   : Lib.t list Build.t
   ; flags      : string list
   ; preprocess : Jbuild_types.Preprocess.t
   ; libname    : string option
@@ -33,52 +33,50 @@ let dot_merlin sctx ~dir ({ requires; flags; _ } as t) =
       let merlin_exists = Path.relative dir ".merlin-exists" in
       SC.add_rule sctx ~targets:[merlin_exists]
         (Build.path path
-         >>>
-         Build.update_file merlin_exists "");
+         >>| fun () ->
+         Action.update_file merlin_exists "");
       SC.add_rule sctx ~targets:[path] (
         requires
-        >>^ (fun libs ->
-          let ppx_flags = ppx_flags sctx ~dir ~src_dir:remaindir t in
-          let internals, externals =
-            List.partition_map libs ~f:(function
-              | Lib.Internal (path, _) ->
-                let path = Path.reach path ~from:remaindir in
-                Inl ("B " ^ path)
-              | Lib.External pkg ->
-                Inr ("PKG " ^ pkg.name))
-          in
-          let flags =
-            match flags with
-            | [] -> []
-            | _  -> ["FLG " ^ String.concat flags ~sep:" "]
-          in
-          let dot_merlin =
-            List.concat
-              [ [ "S ."
-                ; "B " ^ (Path.reach dir ~from:remaindir)
-                ]
-              ; internals
-              ; externals
-              ; flags
-              ; ppx_flags
+        >>| fun libs ->
+        let ppx_flags = ppx_flags sctx ~dir ~src_dir:remaindir t in
+        let internals, externals =
+          List.partition_map libs ~f:(function
+            | Lib.Internal (path, _) ->
+              let path = Path.reach path ~from:remaindir in
+              Inl ("B " ^ path)
+            | Lib.External pkg ->
+              Inr ("PKG " ^ pkg.name))
+        in
+        let flags =
+          match flags with
+          | [] -> []
+          | _  -> ["FLG " ^ String.concat flags ~sep:" "]
+        in
+        let dot_merlin =
+          List.concat
+            [ [ "S ."
+              ; "B " ^ (Path.reach dir ~from:remaindir)
               ]
-          in
-          dot_merlin
-          |> String_set.of_list
-          |> String_set.elements
-          |> List.map ~f:(Printf.sprintf "%s\n")
-          |> String.concat ~sep:"")
-        >>>
-        Build.update_file_dyn path
+            ; internals
+            ; externals
+            ; flags
+            ; ppx_flags
+            ]
+        in
+        dot_merlin
+        |> String_set.of_list
+        |> String_set.elements
+        |> List.map ~f:(Printf.sprintf "%s\n")
+        |> String.concat ~sep:""
+        |> Action.update_file path
       )
     | _ ->
       ()
 
 let merge_two a b =
   { requires =
-      (Build.fanout a.requires b.requires
-       >>^ fun (x, y) ->
-       Lib.remove_dups_preserve_order (x @ y))
+      (Build.map2 a.requires b.requires ~f:(fun x y ->
+         Lib.remove_dups_preserve_order (x @ y)))
   ; flags = a.flags @ b.flags
   ; preprocess =
       if a.preprocess = b.preprocess then

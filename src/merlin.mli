@@ -1,7 +1,7 @@
 (** Merlin rules *)
 
 type t =
-  { requires   : (unit, Lib.t list) Build.t
+  { requires   : Lib.t list Build.t
   ; flags      : string list
   ; preprocess : Jbuild_types.Preprocess.t
   ; libname    : string option

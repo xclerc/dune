@@ -19,10 +19,8 @@ end
 
 module Rule = struct
   type t =
-    { rule_deps      : Pset.t
-    ; static_deps    : Pset.t
-    ; targets        : Pset.t
-    ; build          : (unit, Action.t) Build.t
+    { targets        : Pset.t
+    ; build          : Action.t Build.t
     ; mutable exec   : Exec_status.t
     }
 end
@@ -35,8 +33,8 @@ type t =
     trace      : (Path.t, Digest.t) Hashtbl.t
   ; timestamps : (Path.t, float) Hashtbl.t
   ; mutable local_mkdirs : Path.Local.Set.t
+  ; all_targets_by_dir : Pset.t Pmap.t Lazy.t
   }
-
 
 let all_targets t = Hashtbl.fold t.files ~init:[] ~f:(fun ~key ~data:_ acc -> key :: acc)
 
@@ -161,56 +159,65 @@ let wait_for_file t fn ~targeting =
            (List.map loop ~f:Path.to_string))
 
 module Build_exec = struct
+  open Build.Primitive
   open Build.Repr
 
-  let exec t x =
-    let dyn_deps = ref Pset.empty in
-    let rec exec
-      : type a b. (a, b) t -> a -> b = fun t x ->
+  let exec bs t ~targeting =
+    let deps = ref Pset.empty in
+    let wait_for_deps = ref Future.unit in
+    let rec exec : type a. a t -> a Future.t = fun t ->
       match t with
-      | Arr f -> f x
-      | Compose (a, b) ->
-        exec a x |> exec b
-      | First t ->
-        let x, y = x in
-        (exec t x, y)
-      | Second t ->
-        let x, y = x in
-        (x, exec t y)
-      | Split (a, b) ->
-        let x, y = x in
-        let x = exec a x in
-        let y = exec b y in
-        (x, y)
-      | Fanout (a, b) ->
-        let a = exec a x in
-        let b = exec b x in
-        (a, b)
-      | Paths _ -> x
-      | Paths_glob _ -> x
-      | Contents p -> read_file (Path.to_string p)
-      | Lines_of p -> lines_of_file (Path.to_string p)
-      | Dyn_paths t ->
-        let fns = exec t x in
-        dyn_deps := Pset.union !dyn_deps (Pset.of_list fns);
-        x
-      | Record_lib_deps _ -> x
-      | Fail { fail } -> fail ()
-      | If_file_exists (_, state) ->
-        exec (get_if_file_exists_exn state) x
-      | Memo m ->
-        match m.state with
-        | Evaluated x -> x
-        | Evaluating ->
-          die "Dependency cycle evaluating memoized build arrow %s" m.name
-        | Unevaluated ->
-          m.state <- Evaluating;
-          let x = exec m.t x in
-          m.state <- Evaluated x;
-          x
+      | Return x -> Future.return x
+      | Bind (t, f) -> exec t >>= fun x -> exec (f x)
+      | Map  (t, f) -> exec t >>| fun x -> f x
+      | Both (t1, t2) -> Future.both (exec t1) (exec t2)
+      | Contents path ->
+        wait_for_file bs path ~targeting >>| fun () ->
+        Build.Read_result.Ok (read_file (Path.to_string path))
+      | Lines_of path ->
+        wait_for_file bs path ~targeting >>| fun () ->
+        Build.Read_result.Ok (lines_of_file (Path.to_string path))
+      | Fail fail -> fail.fail ()
+      | Memo m -> begin
+          match m.state with
+          | Evaluated x -> return x
+          | Evaluating ->
+            die "Dependency cycle evaluating memoized build arrow %s" m.name
+          | Unevaluated ->
+            m.state <- Evaluating;
+            exec m.t >>| fun x ->
+            m.state <- Evaluated x;
+            x
+        end
+      | Prim prim ->
+        match prim with
+        | Paths paths ->
+          let new_deps = Pset.diff paths !deps in
+          deps := Pset.union new_deps !deps;
+          wait_for_deps :=
+            Pset.fold new_deps ~init:!wait_for_deps ~f:(fun fn acc ->
+              let future = wait_for_file bs fn ~targeting in
+              acc >>= fun () -> future);
+          Future.unit
+        | Glob (dir, re) ->
+          return
+            (match Pmap.find dir (Lazy.force bs.all_targets_by_dir) with
+             | None -> Pset.empty
+             | Some targets ->
+               Pset.filter targets ~f:(fun path ->
+                 Re.execp re (Path.basename path)))
+        | File_exists p ->
+          let dir = Path.parent p in
+          let targets =
+            Option.value (Pmap.find dir (Lazy.force bs.all_targets_by_dir))
+              ~default:Pset.empty
+          in
+          return (Pset.mem p targets)
+        | Record_lib_deps _ -> return ()
     in
-    let action = exec (Build.repr t) x in
-    (action, !dyn_deps)
+    exec (Build.repr t) >>= fun action ->
+    !wait_for_deps >>| fun () ->
+    (!deps, action)
 end
 
 let add_rule t fn rule ~allow_override =
@@ -221,7 +228,7 @@ let add_rule t fn rule ~allow_override =
 let create_file_rules t targets rule ~allow_override =
   Pset.iter targets ~f:(fun fn -> add_rule t fn rule ~allow_override)
 
-module Pre_rule = Build_interpret.Rule
+module Pre_rule = Build.Rule
 
 let refresh_targets_timestamps_after_rule_execution t targets =
   let missing =
@@ -238,10 +245,6 @@ let refresh_targets_timestamps_after_rule_execution t targets =
       (Pset.elements missing
        |> List.map ~f:(fun fn -> sprintf "- %s" (Path.to_string fn))
        |> String.concat ~sep:"\n")
-
-let wait_for_deps t deps ~targeting =
-  all_unit
-    (Pset.fold deps ~init:[] ~f:(fun fn acc -> wait_for_file t fn ~targeting :: acc))
 
 (* This contains the targets of the actions that are being executed. On exit, we need to
    delete them as they might contain garbage *)
@@ -275,12 +278,12 @@ let make_local_parent_dirs t paths ~map_path =
 
 let sandbox_dir = Path.of_string "_build/.sandbox"
 
-let compile_rule t ~all_targets_by_dir ?(allow_override=false) pre_rule =
+let compile_rule t ?(allow_override=false) pre_rule =
   let { Pre_rule. build; targets; sandbox } = pre_rule in
-  let rule_deps = Build_interpret.rule_deps build ~all_targets_by_dir in
-  let static_deps = Build_interpret.static_action_deps build ~all_targets_by_dir in
 
+  (*
   if !Clflags.debug_rules then begin
+    let deps, lib_deps = Approx_deps.collect t ~all_targets_by_dir in
     let f set =
       Pset.elements set
       |> List.map ~f:Path.to_string
@@ -303,26 +306,19 @@ let compile_rule t ~all_targets_by_dir ?(allow_override=false) pre_rule =
       in
       Printf.eprintf "{%s}, libs:{%s} -> {%s}\n" (f deps) lib_deps (f targets)
   end;
+  *)
 
   let exec = Exec_status.Not_started (fun ~targeting ->
     make_local_parent_dirs t targets ~map_path:(fun x -> x);
-    Future.both
-      (wait_for_deps t static_deps ~targeting)
-      (wait_for_deps t rule_deps ~targeting
-       >>= fun () ->
-       let action, dyn_deps = Build_exec.exec build () in
-       wait_for_deps t ~targeting (Pset.diff dyn_deps static_deps)
-       >>| fun () ->
-       (action, dyn_deps))
-    >>= fun ((), (action, dyn_deps)) ->
-    let all_deps = Pset.union static_deps dyn_deps in
+    Build_exec.exec t build ~targeting
+    >>= fun (deps, action) ->
     if !Clflags.debug_actions then
       Format.eprintf "@{<debug>Action@}: %s@."
         (Sexp.to_string (Action.sexp_of_t action));
-    let all_deps_as_list = Pset.elements all_deps in
-    let targets_as_list  = Pset.elements targets  in
+    let deps_as_list    = Pset.elements deps    in
+    let targets_as_list = Pset.elements targets in
     let hash =
-      let trace = (all_deps_as_list, targets_as_list, Action.for_hash action) in
+      let trace = (deps_as_list, targets_as_list, Action.for_hash action) in
       Digest.string (Marshal.to_string trace [])
     in
     let sandbox_dir =
@@ -341,8 +337,8 @@ let compile_rule t ~all_targets_by_dir ?(allow_override=false) pre_rule =
           Hashtbl.replace t.trace ~key:fn ~data:hash;
           acc || prev_hash <> hash)
     in
-    let targets_min_ts = min_timestamp t targets_as_list  in
-    let deps_max_ts    = max_timestamp t all_deps_as_list in
+    let targets_min_ts = min_timestamp t targets_as_list in
+    let deps_max_ts    = max_timestamp t deps_as_list    in
     if rule_changed ||
        match deps_max_ts, targets_min_ts with
        | _, { missing_files = true; _ } ->
@@ -354,7 +350,7 @@ let compile_rule t ~all_targets_by_dir ?(allow_override=false) pre_rule =
        | { missing_files = true; _ }, _ ->
          Sexp.code_error
            "Dependencies missing after waiting for them"
-           [ "all_deps", Sexp.To_sexp.list Path.sexp_of_t all_deps_as_list ]
+           [ "deps", Sexp.To_sexp.list Path.sexp_of_t deps_as_list ]
        | { limit = None; missing_files = false },
          { missing_files = false; _ } ->
          (* No dependencies, no need to do anything if the rule hasn't changed and targets
@@ -383,11 +379,11 @@ let compile_rule t ~all_targets_by_dir ?(allow_override=false) pre_rule =
             else
               path
           in
-          make_local_parent_dirs t all_deps ~map_path:sandboxed;
-          make_local_parent_dirs t targets  ~map_path:sandboxed;
+          make_local_parent_dirs t deps    ~map_path:sandboxed;
+          make_local_parent_dirs t targets ~map_path:sandboxed;
           Action.sandbox action
             ~sandboxed
-            ~deps:all_deps_as_list
+            ~deps:deps_as_list
             ~targets:targets_as_list
         | None ->
           action
@@ -414,16 +410,14 @@ let compile_rule t ~all_targets_by_dir ?(allow_override=false) pre_rule =
   ) in
   let rule =
     { Rule.
-      static_deps
-    ; rule_deps
-    ; targets
+      targets = targets
     ; build
     ; exec
     }
   in
   create_file_rules t targets rule ~allow_override
 
-let setup_copy_rules t ~all_non_target_source_files ~all_targets_by_dir =
+let setup_copy_rules t ~all_non_target_source_files =
   List.iter t.contexts ~f:(fun (ctx : Context.t) ->
     let ctx_dir = ctx.build_dir in
     Pset.iter all_non_target_source_files ~f:(fun path ->
@@ -441,7 +435,6 @@ let setup_copy_rules t ~all_non_target_source_files ~all_targets_by_dir =
            This allows to keep generated files in tarballs. Maybe we
            should allow it on a case-by-case basis though.  *)
         compile_rule t (Pre_rule.make build ~targets:[ctx_path])
-          ~all_targets_by_dir
           ~allow_override:true))
 
 module Trace = struct
@@ -512,9 +505,10 @@ let create ~contexts ~file_tree ~rules =
     ; trace      = Trace.load ()
     ; timestamps = Hashtbl.create 1024
     ; local_mkdirs = Path.Local.Set.empty
+    ; all_targets_by_dir
     } in
-  List.iter rules ~f:(compile_rule t ~all_targets_by_dir ~allow_override:false);
-  setup_copy_rules t ~all_targets_by_dir
+  List.iter rules ~f:(compile_rule t ~allow_override:false);
+  setup_copy_rules t
     ~all_non_target_source_files:
       (Pset.diff all_source_files all_other_targets);
   at_exit (fun () -> Trace.dump t.trace);
@@ -562,34 +556,94 @@ let do_build t targets =
   with Build_error.E e ->
     Error e
 
-let rules_for_files t paths =
-  List.filter_map paths ~f:(fun path ->
-    match Hashtbl.find t.files path with
-    | None -> None
-    | Some rule -> Some (path, rule))
+(* For [jbuilder external-lib-deps] *)
+module Approx_deps = struct
+  open Build.Primitive
+  open Build.Repr
 
-module File_closure =
-  Top_closure.Make(Path)
-    (struct
-      type graph = t
-      type t = Path.t * Rule.t
-      let key (path, _) = path
-      let deps (_, rule) bs =
-        rules_for_files bs (Pset.elements (Pset.union rule.Rule.static_deps rule.Rule.rule_deps))
-    end)
+  let collect bs t =
+    let deps = ref Pset.empty in
+    let lib_deps = ref Pmap.empty in
+    let rec exec : type a. a t -> a = fun t ->
+      match t with
+      | Return x -> x
+      | Bind (t, f) -> exec (f (exec t))
+      | Map  (t, f) -> f (exec t)
+      | Both (t1, t2) -> (exec t1, exec t2)
+      | Contents path -> deps := Pset.add path !deps; Not_building
+      | Lines_of path -> deps := Pset.add path !deps; Not_building
+      | Fail _ -> ()
+      | Memo m -> begin
+          match m.state with
+          | Evaluated x -> x
+          | Evaluating ->
+            die "Dependency cycle evaluating memoized build arrow %s" m.name
+          | Unevaluated ->
+            m.state <- Evaluating;
+            let x = exec m.t in
+            m.state <- Evaluated x;
+            x
+        end
+      | Prim prim ->
+        match prim with
+        | Paths ps -> deps := Pset.union !deps ps; ()
+        | Glob (dir, re) ->
+          (match Pmap.find dir (Lazy.force bs.all_targets_by_dir) with
+           | None -> Pset.empty
+           | Some targets ->
+             Pset.filter targets ~f:(fun path ->
+               Re.execp re (Path.basename path)))
+        | File_exists p ->
+          let dir = Path.parent p in
+          let targets =
+            Option.value (Pmap.find dir (Lazy.force bs.all_targets_by_dir))
+              ~default:Pset.empty
+          in
+          Pset.mem p targets
+        | Record_lib_deps (dir, deps) ->
+          let data =
+            match Pmap.find dir !lib_deps with
+            | None -> deps
+            | Some others -> Build.merge_lib_deps deps others
+          in
+          lib_deps := Pmap.add !lib_deps ~key:dir ~data
+    in
+    ignore (exec (Build.repr t));
+    (!deps, !lib_deps)
+end
 
 let rules_for_targets t targets =
+  let cache = Hashtbl.create 1024 in
+  let rules_for_files t paths =
+    List.filter_map paths ~f:(fun path ->
+      match Hashtbl.find t.files path with
+      | None -> None
+      | Some rule ->
+        let deps, lib_deps =
+          Hashtbl.find_or_add cache path ~f:(fun _ ->
+            Approx_deps.collect t rule.Rule.build)
+        in
+        Some (path, rule, deps, lib_deps))
+  in
+  let module File_closure =
+    Top_closure.Make(Path)
+      (struct
+        type graph = t
+        type t = Path.t * Rule.t * Path.Set.t * Build.lib_deps Pmap.t
+        let key (path, _, _, _) = path
+        let deps (_, _, deps, _) bs = rules_for_files bs (Pset.elements deps)
+      end)
+  in
   match File_closure.top_closure t (rules_for_files t targets) with
   | Ok l -> l
   | Error cycle ->
     die "dependency cycle detected:\n   %s"
-      (List.map cycle ~f:(fun (path, _) -> Path.to_string path)
+      (List.map cycle ~f:(fun (path, _, _, _) -> Path.to_string path)
        |> String.concat ~sep:"\n-> ")
 
 let all_lib_deps t targets =
   List.fold_left (rules_for_targets t targets) ~init:Pmap.empty
-    ~f:(fun acc (_, rule) ->
-      let lib_deps = Build_interpret.lib_deps rule.Rule.build in
+    ~f:(fun acc (_, _, _, lib_deps) ->
       Pmap.merge acc lib_deps ~f:(fun _ a b ->
         match a, b with
         | None, None -> None
@@ -598,8 +652,7 @@ let all_lib_deps t targets =
         | Some a, Some b -> Some (Build.merge_lib_deps a b)))
 
 let all_lib_deps_by_context t targets =
-  List.fold_left (rules_for_targets t targets) ~init:[] ~f:(fun acc (_, rule) ->
-    let lib_deps = Build_interpret.lib_deps rule.Rule.build in
+  List.fold_left (rules_for_targets t targets) ~init:[] ~f:(fun acc (_, _, _, lib_deps) ->
     Path.Map.fold lib_deps ~init:acc ~f:(fun ~key:path ~data:lib_deps acc ->
       match Path.extract_build_context path with
       | None -> acc
