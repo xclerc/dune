@@ -57,6 +57,8 @@ module type S = sig
   type 'a primitive
   val prim : 'a primitive -> 'a t
 
+  type 'a memoized_data
+
   (**/**)
 
   module Repr : sig
@@ -79,8 +81,9 @@ module type S = sig
 
     and 'a memo_state =
       | Unevaluated
-      | Evaluating
-      | Evaluated of 'a
+      | Starting_evaluation
+      | Evaluating of 'a memoized_data Future.t
+      | Evaluated  of 'a memoized_data
   end
 
   val repr : 'a t -> 'a Repr.t

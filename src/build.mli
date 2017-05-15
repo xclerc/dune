@@ -26,6 +26,14 @@ type lib_deps = lib_dep_kind String_map.t
 
 (**/**)
 
+module Memoized_data : sig
+  type 'a t =
+    { data          : 'a
+    ; deps          : Path.Set.t
+    ; wait_for_deps : unit Future.t
+    }
+end
+
 module Primitive : sig
   type 'a t =
     | Paths : Path.Set.t -> unit t

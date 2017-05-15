@@ -27,8 +27,9 @@ module Make(Prim : Comp_intf.Primitive) = struct
 
     and 'a memo_state =
       | Unevaluated
-      | Evaluating
-      | Evaluated of 'a
+      | Starting_evaluation
+      | Evaluating of 'a Future.t
+      | Evaluated  of 'a
   end
   include Repr
   let repr t = t

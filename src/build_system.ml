@@ -162,15 +162,23 @@ module Build_exec = struct
   open Build.Primitive
   open Build.Repr
 
+  type context =
+    { mutable deps : Pset.t
+    ; mutable wait_for_file : unit Future.t
+    }
+
+  let create_context () =
+    { deps = Pset.empty
+    ; wait_for_file = Future.unit
+    }
+
   let exec bs t ~targeting =
-    let deps = ref Pset.empty in
-    let wait_for_deps = ref Future.unit in
-    let rec exec : type a. a t -> a Future.t = fun t ->
+    let rec exec : type a. context -> a t -> a Future.t = fun c t ->
       match t with
-      | Return x -> Future.return x
-      | Bind (t, f) -> exec t >>= fun x -> exec (f x)
-      | Map  (t, f) -> exec t >>| fun x -> f x
-      | Both (t1, t2) -> Future.both (exec t1) (exec t2)
+      | Return x -> return x
+      | Bind (t, f) -> exec c t >>= fun x -> exec c (f x)
+      | Map  (t, f) -> exec c t >>| fun x -> f x
+      | Both (t1, t2) -> Future.both (exec c t1) (exec c t2)
       | Contents path ->
         wait_for_file bs path ~targeting >>| fun () ->
         Build.Read_result.Ok (read_file (Path.to_string path))
@@ -180,22 +188,37 @@ module Build_exec = struct
       | Fail fail -> fail.fail ()
       | Memo m -> begin
           match m.state with
-          | Evaluated x -> return x
-          | Evaluating ->
+          | Starting_evaluation ->
             die "Dependency cycle evaluating memoized build arrow %s" m.name
+          | Evaluating future -> future
           | Unevaluated ->
-            m.state <- Evaluating;
-            exec m.t >>| fun x ->
-            m.state <- Evaluated x;
-            x
+            m.state <- Starting_evaluation;
+            let ctx = create_context () in
+            let future =
+              exec m.t
+              >>| fun x ->
+              { deps = ctx.deps
+              ; wait_for_deps = ctx.wait_for_deps
+              ; data = x
+              }
+            in
+            m.state <- Evaluating future;
+            future >>| fun { deps; wait_for_deps; data } ->
+            c.deps <- Pset.union c.deps deps;
+            c.wait_for_deps <- (c.wait_for_deps >>= fun () -> wait_for_deps);
+            data
+          | Evaluated { deps; wait_for_deps; data } ->
+            c.deps <- Pset.union c.deps deps;
+            c.wait_for_deps <- (c.wait_for_deps >>= fun () -> wait_for_deps);
+            data
         end
       | Prim prim ->
         match prim with
         | Paths paths ->
           let new_deps = Pset.diff paths !deps in
-          deps := Pset.union new_deps !deps;
-          wait_for_deps :=
-            Pset.fold new_deps ~init:!wait_for_deps ~f:(fun fn acc ->
+          c.deps <- Pset.union new_deps !deps;
+          c.wait_for_deps <-
+            Pset.fold new_deps ~init:c.wait_for_deps ~f:(fun fn acc ->
               let future = wait_for_file bs fn ~targeting in
               acc >>= fun () -> future);
           Future.unit
@@ -216,8 +239,8 @@ module Build_exec = struct
         | Record_lib_deps _ -> return ()
     in
     exec (Build.repr t) >>= fun action ->
-    !wait_for_deps >>| fun () ->
-    (!deps, action)
+    c.wait_for_deps >>| fun () ->
+    (c.deps, action)
 end
 
 let add_rule t fn rule ~allow_override =
@@ -561,28 +584,48 @@ module Approx_deps = struct
   open Build.Primitive
   open Build.Repr
 
+  type context =
+    { mutable deps : Pset.t
+    ; mutable lib_deps : Build.lib_deps Pmap.t
+    }
+
+  let create_context () =
+    { deps = Pset.empty
+    ; lib_deps = Pmap.empty
+    }
+
   let collect bs t =
-    let deps = ref Pset.empty in
-    let lib_deps = ref Pmap.empty in
-    let rec exec : type a. a t -> a = fun t ->
+    let rec exec : type a. context -> a t -> a = fun c t ->
       match t with
       | Return x -> x
-      | Bind (t, f) -> exec (f (exec t))
-      | Map  (t, f) -> f (exec t)
-      | Both (t1, t2) -> (exec t1, exec t2)
-      | Contents path -> deps := Pset.add path !deps; Not_building
-      | Lines_of path -> deps := Pset.add path !deps; Not_building
+      | Bind (t, f) -> exec c (f (exec c t))
+      | Map  (t, f) -> f (exec c t)
+      | Both (t1, t2) -> (exec c t1, exec c t2)
+      | Contents path -> c.deps <- Pset.add path c.deps; Not_building
+      | Lines_of path -> c.deps <- Pset.add path c.deps; Not_building
       | Fail _ -> ()
       | Memo m -> begin
-          match m.state with
-          | Evaluated x -> x
-          | Evaluating ->
-            die "Dependency cycle evaluating memoized build arrow %s" m.name
-          | Unevaluated ->
-            m.state <- Evaluating;
-            let x = exec m.t in
-            m.state <- Evaluated x;
-            x
+          let rec loop () =
+            match m.state with
+            | Evaluating _ -> assert false
+            | Evaluated { deps; lib_deps; x } ->
+              c.deps <- Pset.union c.deps deps;
+              c.lib_deps <-
+                Pmap.merge lib_deps c.lib_deps ~f:(fun _ a b ->
+                  match a, b with
+                  | None, None -> None
+                  | Some a, None -> Some a
+                  | None, Some b -> Some b
+                  | Some a, Some b -> Some (Build.merge_lib_deps a b));
+              x
+            | Starting_evaluation ->
+              die "Dependency cycle evaluating memoized build arrow %s" m.name
+            | Unevaluated ->
+              m.state <- Starting_evaluation;
+              let ctx = create_context () in
+              let x = exec ctx m.t in
+              m.state <- Evaluated { deps = ctx.deps; lib_deps = x;
+              x
         end
       | Prim prim ->
         match prim with
