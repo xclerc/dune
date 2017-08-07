@@ -886,6 +886,14 @@ module Alias_conf = struct
          })
 end
 
+module Include = struct
+  type t =
+    { file : Path.t
+    }
+  let v1 sexp =
+    {file = Path.of_string (Sexp.Of_sexp.string sexp)}
+end
+
 module Stanza = struct
   type t =
     | Library     of Library.t
@@ -894,6 +902,7 @@ module Stanza = struct
     | Provides    of Provides.t
     | Install     of Install_conf.t
     | Alias       of Alias_conf.t
+    | Include     of Include.t
 
   let rules l = List.map l ~f:(fun x -> Rule x)
 
@@ -913,6 +922,7 @@ module Stanza = struct
       ; cstr_loc "menhir"    (Menhir.v1   @> nil) (fun loc x -> rules (Menhir.v1_to_rule loc x))
       ; cstr "install"     (Install_conf.v1 pkgs @> nil) (fun x -> [Install     x])
       ; cstr "alias"       (Alias_conf.v1 pkgs @> nil)   (fun x -> [Alias       x])
+      ; cstr "include"     (Include.v1 @> nil)           (fun x -> [Include     x])
       (* Just for validation and error messages *)
       ; cstr "jbuild_version" (Jbuild_version.t @> nil) (fun _ -> [])
       ]

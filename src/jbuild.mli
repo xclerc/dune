@@ -222,6 +222,12 @@ module Alias_conf : sig
     }
 end
 
+module Include : sig
+  type t =
+    { file : Path.t
+    }
+end
+
 module Stanza : sig
   type t =
     | Library     of Library.t
@@ -230,6 +236,7 @@ module Stanza : sig
     | Provides    of Provides.t
     | Install     of Install_conf.t
     | Alias       of Alias_conf.t
+    | Include     of Include.t
 end
 
 module Stanzas : sig

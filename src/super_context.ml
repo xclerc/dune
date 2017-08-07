@@ -57,6 +57,7 @@ type t =
   ; ppx_drivers                             : (string, Path.t) Hashtbl.t
   ; external_dirs                           : (Path.t, External_dir.t) Hashtbl.t
   ; chdir                                   : (Action.t, Action.t) Build.t
+  ; mutable schemes                         : (unit, unit) Scheme.t Path.Map.t
   }
 
 let context t = t.context
@@ -65,6 +66,7 @@ let stanzas t = t.stanzas
 let packages t = t.packages
 let artifacts t = t.artifacts
 let file_tree t = t.file_tree
+let schemes t = t.schemes
 let rules t = t.rules
 let stanzas_to_consider_for_install t = t.stanzas_to_consider_for_install
 let cxx_flags t = t.cxx_flags
@@ -211,12 +213,26 @@ let create
       match action with
       | Chdir _ -> action
       | _ -> Chdir (context.build_dir, action))
+  ; schemes = Path.Map.empty
   }
 
 let add_rule t ?sandbox ?fallback ?loc build =
   let build = Build.O.(>>>) build t.chdir in
   let rule = Build_interpret.Rule.make ?sandbox ?fallback ?loc ~context:t.context build in
   t.rules <- rule :: t.rules;
+  t.schemes <-
+    List.fold_left rule.targets ~init:t.schemes
+      ~f:(fun acc target ->
+        match Path.extract_build_context (Build_interpret.Target.path target) with
+        | None -> acc
+        | Some (_, path) ->
+          let dir = Path.parent path in
+          let scheme =
+            match Path.Map.find dir acc with
+            | None -> Scheme.rule rule
+            | Some s -> Scheme.O.(>>>) s (Scheme.rule rule)
+          in
+          Path.Map.add acc ~key:dir ~data:scheme);
   t.known_targets_by_src_dir_so_far <-
     List.fold_left rule.targets ~init:t.known_targets_by_src_dir_so_far
       ~f:(fun acc target ->
@@ -231,6 +247,23 @@ let add_rule t ?sandbox ?fallback ?loc build =
             | Some set -> String_set.add fn set
           in
           Path.Map.add acc ~key:dir ~data:files)
+
+let add_include t file =
+  let open Scheme.O in
+  let dir = Path.parent file in
+  t.schemes <-
+    let include_scheme =
+      Scheme.dyn_rules (
+      Scheme.contents file
+      >>^ (fun _contents ->
+        []))
+    in
+    let scheme =
+      match Path.Map.find dir t.schemes with
+      | None -> include_scheme
+      | Some s -> s >>> include_scheme
+    in
+    Path.Map.add t.schemes ~key:dir ~data:scheme
 
 let add_rules t ?sandbox builds =
   List.iter builds ~f:(add_rule t ?sandbox)

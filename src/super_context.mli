@@ -55,6 +55,10 @@ val add_rules
   -> unit
 val rules : t -> Build_interpret.Rule.t list
 
+val add_include : t -> Path.t -> unit
+
+val schemes : t -> (unit, unit) Scheme.t Path.Map.t
+
 val sources_and_targets_known_so_far : t -> src_path:Path.t -> String_set.t
 
 (** [prog_spec t ?hint ?in_the_tree name] resolve a program. If [in_the_tree] is [true]

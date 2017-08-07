@@ -125,6 +125,7 @@ type t =
        [(deps (filename + contents), targets (filename only), action)] *)
     trace      : (Path.t, Digest.t) Hashtbl.t
   ; mutable local_mkdirs : Path.Local.Set.t
+  ; mutable all_targets_by_dir : Pset.t Pmap.t
   }
 
 let all_targets t = Hashtbl.fold t.files ~init:[] ~f:(fun ~key ~data:_ acc -> key :: acc)
@@ -626,6 +627,7 @@ let create ~contexts ~file_tree ~rules =
     ; files      = Hashtbl.create 1024
     ; trace      = Trace.load ()
     ; local_mkdirs = Path.Local.Set.empty
+    ; all_targets_by_dir = Pmap.empty
     } in
   List.iter rules ~f:(compile_rule t ~all_targets_by_dir ~copy_source:false);
   setup_copy_rules t ~all_targets_by_dir
