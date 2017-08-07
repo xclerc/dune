@@ -1057,36 +1057,41 @@ let gen ~contexts ?(filter_out_optional_stanzas_with_missing_deps=true)
         ~stanzas
     in
     let module M = Gen(struct let sctx = sctx end) in
-    (Super_context.schemes sctx, (context.name, stanzas)))
+    (Super_context.rules sctx, (context.name, stanzas)))
   |> Future.all
   >>| fun l ->
-  let schemes, context_names_and_stanzas = List.split l in
-  let schemes =
-    List.fold_left schemes ~init:Path.Map.empty ~f:(fun acc schemes ->
-      Path.Map.fold schemes ~init:acc ~f:(fun ~key:dir ~data:scheme acc ->
-        let scheme =
-          match Path.Map.find dir acc with
-          | None -> scheme
-          | Some s -> Scheme.O.(>>>) s scheme
-        in
-        Path.Map.add acc ~key:dir ~data:scheme))
-  in
-  let alias_rules =
-    Alias.rules aliases
-      ~prefixes:(Path.root :: List.map contexts ~f:(fun c -> c.Context.build_dir)) ~tree
-  in
-  let schemes =
-    List.fold_left alias_rules ~init:schemes ~f:(fun acc rule ->
-      List.fold_left rule.targets ~init:acc ~f:(fun acc target ->
-        match Path.extract_build_context (Build_interpret.Target.path target) with
-        | None -> acc
-        | Some (_, path) ->
-          let dir = Path.parent path in
-          let scheme =
-            match Path.Map.find dir acc with
-            | None -> Scheme.rule rule
-            | Some s -> Scheme.O.(>>>) s (Scheme.rule rule)
-          in
-          Path.Map.add acc ~key:dir ~data:scheme))
-  in
-  schemes, String_map.of_alist_exn context_names_and_stanzas
+  let rules, context_names_and_stanzas = List.split l in
+  (Alias.rules aliases
+     ~prefixes:(Path.root :: List.map contexts ~f:(fun c -> c.Context.build_dir)) ~tree
+   @ List.concat rules,
+   String_map.of_alist_exn context_names_and_stanzas)
+  (* let schemes, context_names_and_stanzas = List.split l in
+   * let schemes =
+   *   List.fold_left schemes ~init:Path.Map.empty ~f:(fun acc schemes ->
+   *     Path.Map.fold schemes ~init:acc ~f:(fun ~key:dir ~data:scheme acc ->
+   *       let scheme =
+   *         match Path.Map.find dir acc with
+   *         | None -> scheme
+   *         | Some s -> Scheme.O.(>>>) s scheme
+   *       in
+   *       Path.Map.add acc ~key:dir ~data:scheme))
+   * in
+   * let alias_rules =
+   *   Alias.rules aliases
+   *     ~prefixes:(Path.root :: List.map contexts ~f:(fun c -> c.Context.build_dir)) ~tree
+   * in
+   * let schemes =
+   *   List.fold_left alias_rules ~init:schemes ~f:(fun acc rule ->
+   *     List.fold_left rule.targets ~init:acc ~f:(fun acc target ->
+   *       match Path.extract_build_context (Build_interpret.Target.path target) with
+   *       | None -> acc
+   *       | Some (_, path) ->
+   *         let dir = Path.parent path in
+   *         let scheme =
+   *           match Path.Map.find dir acc with
+   *           | None -> Scheme.rule rule
+   *           | Some s -> Scheme.O.(>>>) s (Scheme.rule rule)
+   *         in
+   *         Path.Map.add acc ~key:dir ~data:scheme))
+   * in
+   * schemes, String_map.of_alist_exn context_names_and_stanzas *)

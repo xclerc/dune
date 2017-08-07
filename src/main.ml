@@ -20,7 +20,6 @@ let setup ?(log=Log.no_log) ?filter_out_optional_stanzas_with_missing_deps
       ?extra_ignored_subtrees
       () =
   let conf = Jbuild_load.load ?extra_ignored_subtrees () in
-  List.iter conf.jbuilds
   Option.iter only_packages ~f:(fun set ->
     String_set.iter set ~f:(fun pkg ->
       if not (String_map.mem pkg conf.packages) then
