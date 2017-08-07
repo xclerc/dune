@@ -43,7 +43,7 @@ let static_deps t ~all_targets_by_dir =
         | G_evaluated l ->
           { acc with action_deps = Pset.union acc.action_deps (Pset.of_list l) }
         | G_unevaluated (dir, re) ->
-          match Pmap.find dir (Lazy.force all_targets_by_dir) with
+          match Pmap.find dir all_targets_by_dir with
           | None -> acc
           | Some targets ->
             let result =
@@ -60,7 +60,7 @@ let static_deps t ~all_targets_by_dir =
         | Undecided (then_, else_) ->
           let dir = Path.parent p in
           let targets =
-            Option.value (Pmap.find dir (Lazy.force all_targets_by_dir))
+            Option.value (Pmap.find dir all_targets_by_dir)
               ~default:Pset.empty
           in
           if Pset.mem p targets then begin
@@ -166,4 +166,17 @@ module Rule = struct
     ; fallback
     ; loc
     }
+
+  let target_dir_exn t =
+    let target_dir =
+      List.fold_left t.targets ~init:None ~f:(fun acc target ->
+        let path = Target.path target in
+        let dir = Path.parent path in
+        match acc with
+        | None -> Some dir
+        | Some d ->
+          assert ((Path.compare d dir) = 0);
+          Some dir)
+    in
+    Option.value_exn target_dir
 end

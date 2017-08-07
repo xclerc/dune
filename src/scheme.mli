@@ -28,3 +28,5 @@ val rules : Rule.t list -> ('a, 'a) t
 val contents : Path.t -> ('a, string) t
 
 val dyn_rules : ('a, Rule.t list) t -> ('a, 'a) t
+
+val empty : unit -> ('a, 'a) t

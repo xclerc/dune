@@ -23,6 +23,8 @@ let contents p = Contents p
 
 let dyn_rules l = Dyn_rules l
 
+let empty () = Rules []
+
 module O = struct
   let ( >>> ) a b = Compose (a, b)
   let ( >>^ ) t f = t >>> arr f

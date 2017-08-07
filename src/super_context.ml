@@ -221,24 +221,13 @@ let add_rule t ?sandbox ?fallback ?loc build =
   let rule = Build_interpret.Rule.make ?sandbox ?fallback ?loc ~context:t.context build in
   t.rules <- rule :: t.rules;
 
-  let target =
-    List.fold_left rule.targets ~init:None
-      ~f:(fun acc target ->
-        let path = Build_interpret.Target.path target in
-        let dir = Path.parent path in
-        match acc with
-        | None -> Some dir
-        | Some d ->
-          assert ((Path.compare d dir) = 0);
-          Some dir)
-  in
-  let target = Option.value_exn target in
+  let target_dir = Build_interpret.Rule.target_dir_exn rule in
   let scheme =
-    match Path.Map.find target t.schemes with
+    match Path.Map.find target_dir t.schemes with
     | None -> Scheme.rule rule
     | Some s -> Scheme.O.(>>>) s (Scheme.rule rule)
   in
-  t.schemes <- Path.Map.add t.schemes ~key:target ~data:scheme;
+  t.schemes <- Path.Map.add t.schemes ~key:target_dir ~data:scheme;
 
   t.known_targets_by_src_dir_so_far <-
     List.fold_left rule.targets ~init:t.known_targets_by_src_dir_so_far

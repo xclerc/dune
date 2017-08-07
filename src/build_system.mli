@@ -5,9 +5,9 @@ open! Import
 type t
 
 val create
-  :  contexts:Context.t list
+  :  scheme_cb:(Path.t -> (unit, unit) Scheme.t)
+  -> contexts:Context.t list
   -> file_tree:File_tree.t
-  -> rules:Build_interpret.Rule.t list
   -> t
 
 val is_target : t -> Path.t -> bool

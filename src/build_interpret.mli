@@ -26,6 +26,7 @@ module Rule : sig
     -> ?loc:Loc.t
     -> (unit, Action.t) Build.t
     -> t
+  val target_dir_exn : t -> Path.t
 end
 
 module Static_deps : sig
@@ -38,7 +39,7 @@ end
 (* must be called first *)
 val static_deps
   :  (_, _) Build.t
-  -> all_targets_by_dir:Path.Set.t Path.Map.t Lazy.t
+  -> all_targets_by_dir:Path.Set.t Path.Map.t
   -> Static_deps.t
 
 val lib_deps
