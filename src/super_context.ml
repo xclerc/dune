@@ -244,16 +244,10 @@ let add_rule t ?sandbox ?fallback ?loc build =
           in
           Path.Map.add acc ~key:dir ~data:files)
 
-let add_include t file =
+let add_include t dir include_scheme =
   let open Scheme.O in
-  let dir = Path.parent file in
+  Printf.printf "add_include %s\n" (Path.to_string dir);
   t.schemes <-
-    let include_scheme =
-      Scheme.dyn_rules (
-      Scheme.contents file
-      >>^ (fun _contents ->
-        []))
-    in
     let scheme =
       match Path.Map.find dir t.schemes with
       | None -> include_scheme

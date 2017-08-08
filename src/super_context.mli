@@ -55,7 +55,7 @@ val add_rules
   -> unit
 val rules : t -> Build_interpret.Rule.t list
 
-val add_include : t -> Path.t -> unit
+val add_include : t -> Path.t -> (unit, unit) Scheme.t -> unit
 
 val schemes : t -> (unit, unit) Scheme.t Path.Map.t
 

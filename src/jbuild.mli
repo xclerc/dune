@@ -224,7 +224,7 @@ end
 
 module Include : sig
   type t =
-    { file : Path.t
+    { file : string
     }
 end
 

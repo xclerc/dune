@@ -5,8 +5,8 @@ module Rule = Build_interpret.Rule
 module Repr : sig
   type ('a, 'b) t =
     | Arr : ('a -> 'b) -> ('a, 'b) t
-    | Contents : Path.t -> ('a, string) t
-    | Dyn_rules : ('a, Rule.t list) t -> ('a, 'a) t
+    | Load_sexps : Path.t -> ('a, Sexp.Ast.t list) t
+    | Dyn_rules : (unit, Rule.t list) t -> ('a, 'a) t
     | Rules : Rule.t list -> ('a, 'a) t
     | Compose : ('a, 'b) t * ('b, 'c) t -> ('a, 'c) t
 end
@@ -25,8 +25,8 @@ val rule : Rule.t -> ('a, 'a) t
 
 val rules : Rule.t list -> ('a, 'a) t
 
-val contents : Path.t -> ('a, string) t
+val load_sexps : Path.t -> ('a, Sexp.Ast.t list) t
 
-val dyn_rules : ('a, Rule.t list) t -> ('a, 'a) t
+val dyn_rules : (unit, Rule.t list) t -> ('a, 'a) t
 
 val empty : unit -> ('a, 'a) t

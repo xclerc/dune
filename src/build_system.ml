@@ -127,7 +127,8 @@ type t =
   ; mutable local_mkdirs : Path.Local.Set.t
   ; mutable all_targets_by_dir : Pset.t Pmap.t
   ; scheme_cb : Path.t -> (unit, unit) Scheme.t
-  ; mutable dirs_loaded : Pset.t
+  ; mutable dirs_loaded : unit Lazy.t Pmap.t
+  ; source_files_by_dir : Pset.t Pmap.t
   }
 
 let all_targets t = Hashtbl.fold t.files ~init:[] ~f:(fun ~key ~data:_ acc -> key :: acc)
@@ -326,7 +327,22 @@ let () =
     pending_targets := Pset.empty;
     Pset.iter fns ~f:Path.unlink_no_err)
 
-let rec get_rules scheme =
+module Scheme_exec = struct
+  open Scheme.Repr
+  let exec t x =
+    let rec exec
+      : type a b. (a, b) t -> a -> b = fun t x ->
+      match t with
+      | Arr f -> f x
+      | Load_sexps p -> Sexp_lexer.Load.many (Path.to_string p)
+      | Compose (a, b) -> exec a x |> exec b
+      | Rules _ -> x
+      | Dyn_rules _ -> x
+    in
+    exec t x
+end
+
+let get_scheme_static_rules scheme =
   let open Scheme.Repr in
   let rec loop : type a b. (a, b) t -> Pre_rule.t list -> Pre_rule.t list = fun t acc ->
     match t with
@@ -336,46 +352,95 @@ let rec get_rules scheme =
   in
   loop (Scheme.repr scheme) []
 
-and load_dir t dir =
-  if not (Path.Set.mem dir t.dirs_loaded) then begin
+let get_scheme_dyn_rules scheme =
+  let open Scheme.Repr in
+  let rec loop : type a b. (a, b) t -> Pre_rule.t list -> Pre_rule.t list = fun t acc ->
+    match t with
+    | Dyn_rules rl -> List.append acc (Scheme_exec.exec rl ())
+    | Compose (a, b) -> loop a (loop b acc)
+    | _ -> acc
+  in
+  loop (Scheme.repr scheme) []
+
+let get_scheme_deps scheme =
+  let open Scheme.Repr in
+  let rec loop : type a b. (a, b) t -> Path.t list -> Path.t list = fun t acc ->
+    match t with
+    | Load_sexps p -> p :: acc
+    | Dyn_rules t -> loop t acc
+    | Compose (a, b) -> loop a (loop b acc)
+    | _ -> acc
+  in
+  loop (Scheme.repr scheme) []
+
+let rule_targets rules =
+  List.fold_left rules ~init:Pset.empty ~f:(fun acc rule ->
+    List.fold_left rule.Pre_rule.targets ~init:acc ~f:(fun acc target ->
+      Pset.add (Build_interpret.Target.path target) acc))
+
+let add_targets t targets =
+  Pset.iter targets ~f:(fun target ->
+    (* Printf.printf "load_dir target %s\n" (Path.to_string target); *)
+    if not (Path.is_root target) then
+      let dir, path = Path.parent target, target in
+      let targets =
+        match Pmap.find dir t.all_targets_by_dir with
+        | None -> Pset.singleton path
+        | Some targets -> Pset.add path targets
+      in
+      t.all_targets_by_dir <- Pmap.add ~key:dir ~data:targets t.all_targets_by_dir)
+
+let rec load_dir t dir ~targeting =
+  match Pmap.find dir t.dirs_loaded with
+  | None ->
+  begin
     Printf.printf "load_dir %s\n" (Path.to_string dir);
-    t.dirs_loaded <- Path.Set.add dir t.dirs_loaded;
-    let scheme = t.scheme_cb dir in
-    let rules = get_rules scheme in
-    let targets =
-      List.fold_left rules ~init:Pset.empty ~f:(fun acc rule ->
-        List.fold_left rule.Pre_rule.targets ~init:acc ~f:(fun acc target ->
-          Pset.add (Build_interpret.Target.path target) acc))
-    in
-    Pset.iter targets ~f:(fun target ->
-      if not (Path.is_root target) then
-        let dir, path = Path.parent target, target in
-        let targets =
-          match Pmap.find dir t.all_targets_by_dir with
-          | None -> Pset.singleton path
-          | Some targets -> Pset.add path targets
-        in
-        t.all_targets_by_dir <- Pmap.add ~key:dir ~data:targets t.all_targets_by_dir);
-    let all_targets = Pmap.find_default dir t.all_targets_by_dir ~default:Pset.empty in
-    let copy_targets = Pset.diff all_targets targets in
-    let copy_targets = Pset.map copy_targets ~f:(fun p ->
-      let (_, p) = Option.value_exn (Path.extract_build_context p) in
-      p)
-    in
-    setup_copy_rules t ~all_non_target_source_files:copy_targets;
-    List.iter rules ~f:(compile_rule t ~copy_source:false)
+    let load = lazy(
+      Printf.printf "forcing lazy\n";
+      let scheme = t.scheme_cb dir in
+      let rules = get_scheme_static_rules scheme in
+      let targets = rule_targets rules in
+      add_targets t targets;
+      List.iter rules ~f:(compile_rule t ~copy_source:false);
+      begin
+        match Path.extract_build_context_dir dir with
+        | None -> ()
+        | Some (ctx_dir, source_dir) ->
+          let all_non_target_source_files =
+            Pmap.find_default source_dir t.source_files_by_dir ~default:Pset.empty
+          in
+          setup_copy_rules t ~all_non_target_source_files ctx_dir
+      end;
+      let deps = get_scheme_deps scheme in
+      List.iter deps ~f:(fun p -> Printf.printf "scheme dep %s\n" (Path.to_string p));
+      Printf.printf "ok1\n";
+      Scheduler.go (wait_for_deps t (Pset.of_list deps) ~targeting);
+      Printf.printf "ok2\n";
+      let dyn_rules = get_scheme_dyn_rules scheme in
+      let targets = rule_targets dyn_rules in
+      (* Printf.printf "dyn rules len %s %i\n" (Path.to_string dir) (List.length dyn_rules); *)
+      add_targets t targets;
+      List.iter dyn_rules ~f:(compile_rule t ~copy_source:false);
+      Printf.printf "dir loaded %s\n" (Path.to_string dir)
+    ) in
+    t.dirs_loaded <- Pmap.add t.dirs_loaded ~key:dir ~data:load;
+    load
   end
+  | Some lz ->
+    Printf.printf "lazy val %b\n" (Lazy.is_val lz);
+    Printf.printf "lazy load_dir %s\n" (Path.to_string dir);
+    lz
 
 and is_target t file =
   let dir = Path.parent file in
-  load_dir t dir;
-  Printf.printf "is_target %s %b\n" (Path.to_string file) (Hashtbl.mem t.files file);
+  Lazy.force (load_dir t dir ~targeting:file);
+  (* Printf.printf "is_target %s %b\n" (Path.to_string file) (Hashtbl.mem t.files file); *)
   Hashtbl.mem t.files file
 
 and wait_for_file t fn ~targeting =
-  Printf.printf "wait_for_file %s\n" (Path.to_string fn);
+  Printf.printf "wait_for_file %s t:%s\n" (Path.to_string fn) (Path.to_string targeting);
   let dir = Path.parent fn in
-  load_dir t dir;
+  Lazy.force (load_dir t dir ~targeting);
   match Hashtbl.find t.files fn with
   | None ->
     if Path.is_in_build_dir fn then
@@ -454,7 +519,6 @@ and make_local_parent_dirs t paths ~map_path =
         t.local_mkdirs <- Path.Local.Set.add parent t.local_mkdirs
       end
     | _ -> ())
-
 
 and compile_rule t ?(copy_source=false) pre_rule =
   Printf.printf "compile_rule\n";
@@ -578,26 +642,24 @@ and compile_rule t ?(copy_source=false) pre_rule =
   in
   create_file_specs t target_specs rule ~copy_source
 
-and setup_copy_rules t ~all_non_target_source_files =
-  List.iter t.contexts ~f:(fun (ctx : Context.t) ->
-    let ctx_dir = ctx.build_dir in
-    Pset.iter all_non_target_source_files ~f:(fun path ->
-      let ctx_path = Path.append ctx_dir path in
-      if is_target t ctx_path &&
-         String.is_suffix (Path.basename ctx_path) ~suffix:".install" then
-        (* Do not copy over .install files that are generated by a rule. *)
-        ()
-      else
-        Printf.printf "setup copy rule %s %s\n" (Path.to_string path) (Path.to_string ctx_path);
-      let build = Build.copy ~src:path ~dst:ctx_path in
-      (* We temporarily allow overrides while setting up copy rules
-         from the source directory so that artifact that are already
-         present in the source directory are not re-computed.
+and setup_copy_rules t ~all_non_target_source_files ctx_dir =
+  Pset.iter all_non_target_source_files ~f:(fun path ->
+    let ctx_path = Path.append ctx_dir path in
+    if is_target t ctx_path &&
+       String.is_suffix (Path.basename ctx_path) ~suffix:".install" then
+      (* Do not copy over .install files that are generated by a rule. *)
+      ()
+    else
+      (* Printf.printf "setup copy rule %s %s\n" (Path.to_string path) (Path.to_string ctx_path); *)
+    let build = Build.copy ~src:path ~dst:ctx_path in
+    (* We temporarily allow overrides while setting up copy rules
+       from the source directory so that artifact that are already
+       present in the source directory are not re-computed.
 
-         This allows to keep generated files in tarballs. Maybe we
-         should allow it on a case-by-case basis though.  *)
-      compile_rule t (Pre_rule.make build)
-        ~copy_source:true))
+       This allows to keep generated files in tarballs. Maybe we
+       should allow it on a case-by-case basis though.  *)
+    compile_rule t (Pre_rule.make build)
+      ~copy_source:true)
 
 module Trace = struct
   type t = (Path.t, Digest.t) Hashtbl.t
@@ -652,32 +714,26 @@ let create ~scheme_cb ~contexts ~file_tree =
             |> List.map ~f:(Path.relative path)
             |> Pset.of_list)))
   in
-  Pset.iter all_source_files ~f:(fun s -> Printf.printf "source_file:%s\n" (Path.to_string s));
-  let all_copy_targets =
-    List.fold_left contexts ~init:Pset.empty ~f:(fun acc (ctx : Context.t) ->
-      Pset.union acc (Pset.elements all_source_files
-                      |> List.map ~f:(Path.append ctx.build_dir)
-                      |> Pset.of_list))
+  let source_files_by_dir =
+    Pset.fold all_source_files ~init:Pmap.empty ~f:(fun path acc ->
+      let dir = Path.parent path in
+      let sources = Pmap.find_default dir acc ~default:Pset.empty in
+      let sources = Pset.add path sources in
+      Pmap.add acc ~key:dir ~data:sources)
   in
-  Pset.iter all_copy_targets ~f:(fun s -> Printf.printf "copy_target:%s\n" (Path.to_string s));
-  let all_targets_by_dir =
-    Pset.elements all_copy_targets
-    |> List.filter_map ~f:(fun path ->
-      if Path.is_root path then
-        None
-      else
-        Some (Path.parent path, path))
-    |> Pmap.of_alist_multi
-    |> Pmap.map ~f:Pset.of_list
-  in
+  (* Pmap.iter source_files_by_dir ~f:(fun ~key ~data ->
+   *   Printf.printf "source dir %s\n" (Path.to_string key);
+   *   Pset.iter data ~f:(fun path -> Printf.printf "source file %s\n" (Path.to_string path))
+   * ); *)
   let t =
     { contexts
     ; files      = Hashtbl.create 1024
     ; trace      = Trace.load ()
     ; local_mkdirs = Path.Local.Set.empty
-    ; all_targets_by_dir
+    ; all_targets_by_dir = Pmap.empty
     ; scheme_cb
-    ; dirs_loaded = Pset.empty
+    ; dirs_loaded = Pmap.empty
+    ; source_files_by_dir
     } in
   (let l = !disabled_fallback_rules in
    disabled_fallback_rules := [];
@@ -752,7 +808,7 @@ let remove_old_artifacts t =
   )
 
 let do_build_exn t targets =
-  Printf.printf "do_build_exn\n";
+  (* Printf.printf "do_build_exn\n"; *)
   remove_old_artifacts t;
   all_unit (List.map targets ~f:(fun fn -> wait_for_file t fn ~targeting:fn))
 
@@ -853,7 +909,7 @@ module Rule_closure =
     end)
 
 let build_rules t ?(recursive=false) targets =
-  Printf.printf "build_rules\n";
+  (* Printf.printf "build_rules\n"; *)
   let rules_seen = ref Id_set.empty in
   let rules = ref [] in
   let rec loop fn =

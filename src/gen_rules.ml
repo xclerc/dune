@@ -678,6 +678,37 @@ Add it to your jbuild file to remove this warning.
      | Stanza                                                          |
      +-----------------------------------------------------------------+ *)
 
+  let add_include incl sctx ~dir ~scope =
+    let file = Path.relative dir incl.Include.file in
+    let open Scheme.O in
+    let include_rules =
+      Scheme.load_sexps file
+      >>^ (fun sexps ->
+        let stanzas = Stanzas.parse scope sexps in
+        List.map stanzas ~f:(fun stanza ->
+          match stanza with
+          | Stanza.Rule rule ->
+            let targets : SC.Action.targets = match rule.targets with
+              | Infer -> Infer
+              | Static fns -> Static (List.map fns ~f:(Path.relative dir))
+            in
+            let build =
+              let open Build.O in
+              (SC.Deps.interpret sctx ~scope ~dir rule.deps
+               >>>
+               SC.Action.run
+                 sctx
+                 rule.action
+                 ~dir
+                 ~dep_kind:Required
+                 ~targets
+                 ~scope)
+            in
+            Build_interpret.Rule.make build
+          | _ -> die "Only rule stanzas are allowed in included files\n"))
+    in
+    SC.add_include sctx dir (Scheme.dyn_rules include_rules)
+
   let rules { SC.Dir_with_jbuild. src_dir; ctx_dir; stanzas; scope } =
     (* Interpret user rules and other simple stanzas first in order to populate the known
        target table, which is needed for guessing the list of modules. *)
@@ -686,7 +717,7 @@ Add it to your jbuild file to remove this warning.
       match (stanza : Stanza.t) with
       | Rule         rule  -> user_rule   rule  ~dir ~scope
       | Alias        alias -> alias_rules alias ~dir ~scope
-      | Include      incl  -> SC.add_include sctx incl.file
+      | Include      incl  -> add_include incl sctx ~dir ~scope
       | Library _ | Executables _ | Provides _ | Install _ -> ());
     let files = lazy (
       let files = SC.sources_and_targets_known_so_far sctx ~src_path:src_dir in
@@ -1027,7 +1058,6 @@ let gen ~contexts ?(filter_out_optional_stanzas_with_missing_deps=true)
       String_map.filter packages ~f:(fun _ { Package.name; _ } ->
         String_set.mem name pkgs)
   in
-  Printf.printf "gen %i\n" (List.length contexts);
   List.map contexts ~f:(fun context ->
     Jbuild_load.Jbuilds.eval ~context jbuilds >>| fun stanzas ->
     let stanzas =
@@ -1045,7 +1075,6 @@ let gen ~contexts ?(filter_out_optional_stanzas_with_missing_deps=true)
                String_set.mem package.name pkgs
              | _ -> true)))
     in
-    List.iter stanzas ~f:(fun (p, _, _) -> Printf.printf "jbuild %s\n" (Path.to_string p));
     let sctx =
       Super_context.create
         ~context

@@ -51,10 +51,9 @@ let setup ?(log=Log.no_log) ?filter_out_optional_stanzas_with_missing_deps
   >>= fun (schemes, stanzas) ->
   let build_system = Build_system.create ~scheme_cb:(fun path ->
     match Path.Map.find path schemes with
-    | None -> Printf.printf "none\n"; Scheme.empty ()
+    | None -> Scheme.empty ()
     | Some s -> s)
     ~contexts ~file_tree:conf.file_tree in
-  Printf.printf "created\n";
   return { build_system
          ; stanzas
          ; contexts

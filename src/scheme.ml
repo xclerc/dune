@@ -3,8 +3,8 @@ module Rule = Build_interpret.Rule
 module Repr = struct
   type ('a, 'b) t =
     | Arr : ('a -> 'b) -> ('a, 'b) t
-    | Contents : Path.t -> ('a, string) t
-    | Dyn_rules : ('a, Rule.t list) t -> ('a, 'a) t
+    | Load_sexps : Path.t -> ('a, Sexp.Ast.t list) t
+    | Dyn_rules : (unit, Rule.t list) t -> ('a, 'a) t
     | Rules : Rule.t list -> ('a, 'a) t
     | Compose : ('a, 'b) t * ('b, 'c) t -> ('a, 'c) t
 end
@@ -19,7 +19,7 @@ let rule r = Rules [r]
 
 let rules l = Rules l
 
-let contents p = Contents p
+let load_sexps p = Load_sexps p
 
 let dyn_rules l = Dyn_rules l
 

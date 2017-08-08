@@ -888,10 +888,10 @@ end
 
 module Include = struct
   type t =
-    { file : Path.t
+    { file : string
     }
   let v1 sexp =
-    {file = Path.of_string (Sexp.Of_sexp.string sexp)}
+    {file = Sexp.Of_sexp.string sexp}
 end
 
 module Stanza = struct
