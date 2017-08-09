@@ -46,6 +46,10 @@ val lib_deps
   :  (_, _) Build.t
   -> Build.lib_deps Path.Map.t
 
+val dir_deps
+  : (_, _) Build.t
+  -> Path.t list
+
 val targets
   :  (_, _) Build.t
   -> Target.t list

@@ -43,9 +43,11 @@ let static_deps t ~all_targets_by_dir =
         | G_evaluated l ->
           { acc with action_deps = Pset.union acc.action_deps (Pset.of_list l) }
         | G_unevaluated (dir, re) ->
+          Printf.printf "uneval %s\n" (Path.to_string dir);
           match Pmap.find dir all_targets_by_dir with
-          | None -> acc
+          | None -> Printf.printf "none static dep glob\n"; acc
           | Some targets ->
+            Printf.printf "some static dep glob\n";
             let result =
               Pset.filter targets ~f:(fun path ->
                 Re.execp re (Path.basename path))
@@ -80,6 +82,34 @@ let static_deps t ~all_targets_by_dir =
     | Memo m -> loop m.t acc
   in
   loop (Build.repr t) { rule_deps = Pset.empty; action_deps = Pset.empty }
+
+let dir_deps t =
+  let rec loop : type a b. (a, b) t -> Path.t list -> Path.t list = fun t acc ->
+    match t with
+    | Arr _ -> acc
+    | Targets _ -> acc
+    | Store_vfile _ -> acc
+    | Compose (a, b) -> loop a (loop b acc)
+    | First t -> loop t acc
+    | Second t -> loop t acc
+    | Split (a, b) -> loop a (loop b acc)
+    | Fanout (a, b) -> loop a (loop b acc)
+    | Paths _ -> acc
+    | Paths_glob state -> begin
+        match !state with
+        | G_evaluated _ -> acc
+        | G_unevaluated (dir, _) -> dir :: acc
+      end
+    | If_file_exists (p, _) -> (Path.parent p) :: acc
+    | Dyn_paths t -> loop t acc
+    | Vpath _ -> acc
+    | Contents _ -> acc
+    | Lines_of _ -> acc
+    | Record_lib_deps _ -> acc
+    | Fail _ -> acc
+    | Memo m -> loop m.t acc
+  in
+  loop (Build.repr t) []
 
 let lib_deps =
   let rec loop : type a b. (a, b) t -> Build.lib_deps Pmap.t -> Build.lib_deps Pmap.t

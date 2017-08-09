@@ -71,7 +71,9 @@ module Repr = struct
   let get_glob_result_exn state =
     match !state with
     | G_evaluated l -> l
-    | G_unevaluated _ -> code_errorf "Build.get_glob_result_exn: got unevaluated"
+    | G_unevaluated (path, _) ->
+      Printf.printf "unevaluated %s\n" (Path.to_string path);
+      code_errorf "Build.get_glob_result_exn: got unevaluated"
 end
 include Repr
 let repr t = t

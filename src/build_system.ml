@@ -40,6 +40,13 @@ module Exec_status = struct
     | Running         of Running.t
 end
 
+module Load_dir_status = struct
+  type t =
+    | Starting
+    | Loading_scheme_deps
+    | Running of unit Future.t
+end
+
 module Internal_rule = struct
   module Id : sig
     type t
@@ -127,7 +134,7 @@ type t =
   ; mutable local_mkdirs : Path.Local.Set.t
   ; mutable all_targets_by_dir : Pset.t Pmap.t
   ; scheme_cb : Path.t -> (unit, unit) Scheme.t
-  ; mutable dirs_loaded : unit Lazy.t Pmap.t
+  ; mutable dirs_load : Load_dir_status.t Pmap.t
   ; source_files_by_dir : Pset.t Pmap.t
   }
 
@@ -380,6 +387,7 @@ let rule_targets rules =
 
 let add_targets t targets =
   Pset.iter targets ~f:(fun target ->
+    (* Printf.printf "add_target %s\n" (Path.to_string target); *)
     (* Printf.printf "load_dir target %s\n" (Path.to_string target); *)
     if not (Path.is_root target) then
       let dir, path = Path.parent target, target in
@@ -390,110 +398,134 @@ let add_targets t targets =
       in
       t.all_targets_by_dir <- Pmap.add ~key:dir ~data:targets t.all_targets_by_dir)
 
-let rec load_dir t dir ~targeting =
-  match Pmap.find dir t.dirs_loaded with
+let rec load_rule_dir_deps t rule ~targeting =
+  let {Pre_rule.build; _} = rule in
+  let dir_deps = Build_interpret.dir_deps build in
+  List.iter dir_deps ~f:(fun dir ->
+    Printf.printf "Dir dep %s\n" (Path.to_string dir);
+    ignore (load_dir t dir ~targeting))
+
+and load_dir t dir ~targeting =
+  match Pmap.find dir t.dirs_load with
   | None ->
   begin
     Printf.printf "load_dir %s\n" (Path.to_string dir);
-    let load = lazy(
-      Printf.printf "forcing lazy\n";
+    t.dirs_load <- Pmap.add t.dirs_load ~key:dir ~data:Load_dir_status.Starting;
+    let load =
       let scheme = t.scheme_cb dir in
       let rules = get_scheme_static_rules scheme in
       let targets = rule_targets rules in
+      (* Printf.printf "add targets %s\n" (Path.to_string dir); *)
       add_targets t targets;
-      List.iter rules ~f:(compile_rule t ~copy_source:false);
-      begin
+      let copy_sources, copy_targets, ctx_dir =
         match Path.extract_build_context_dir dir with
-        | None -> ()
+        | None -> Pset.empty, Pset.empty, Path.of_string "."
         | Some (ctx_dir, source_dir) ->
-          let all_non_target_source_files =
-            Pmap.find_default source_dir t.source_files_by_dir ~default:Pset.empty
-          in
-          setup_copy_rules t ~all_non_target_source_files ctx_dir
-      end;
+          Pmap.find_default source_dir t.source_files_by_dir ~default:Pset.empty,
+          Pset.map ~f:(fun path ->
+            Path.append ctx_dir path)
+            (Pmap.find_default source_dir t.source_files_by_dir ~default:Pset.empty),
+          ctx_dir
+      in
+      add_targets t copy_targets;
+      List.iter rules ~f:(load_rule_dir_deps t ~targeting);
+      List.iter rules ~f:(compile_rule t ~copy_source:false);
+      setup_copy_rules t ~all_non_target_source_files:copy_sources ctx_dir;
+
+      t.dirs_load <- Pmap.add t.dirs_load ~key:dir ~data:Load_dir_status.Loading_scheme_deps;
       let deps = get_scheme_deps scheme in
-      List.iter deps ~f:(fun p -> Printf.printf "scheme dep %s\n" (Path.to_string p));
-      Printf.printf "ok1\n";
-      Scheduler.go (wait_for_deps t (Pset.of_list deps) ~targeting);
-      Printf.printf "ok2\n";
-      let dyn_rules = get_scheme_dyn_rules scheme in
-      let targets = rule_targets dyn_rules in
-      (* Printf.printf "dyn rules len %s %i\n" (Path.to_string dir) (List.length dyn_rules); *)
-      add_targets t targets;
-      List.iter dyn_rules ~f:(compile_rule t ~copy_source:false);
-      Printf.printf "dir loaded %s\n" (Path.to_string dir)
-    ) in
-    t.dirs_loaded <- Pmap.add t.dirs_loaded ~key:dir ~data:load;
-    load
+      (* List.iter deps ~f:(fun p -> Printf.printf "scheme dep %s\n" (Path.to_string p)); *)
+      wait_for_deps t (Pset.of_list deps) ~targeting
+      >>| (fun () ->
+        let dyn_rules = get_scheme_dyn_rules scheme in
+        let targets = rule_targets dyn_rules in
+        (* Printf.printf "dyn rules len %s %i\n" (Path.to_string dir) (List.length dyn_rules); *)
+        add_targets t targets;
+        List.iter dyn_rules ~f:(compile_rule t ~copy_source:false))
+      (* Printf.printf "dir loaded %s\n" (Path.to_string dir)) *)
+    in
+    t.dirs_load <- Pmap.add t.dirs_load ~key:dir ~data:(Load_dir_status.Running load);
+    Load_dir_status.Running load
   end
-  | Some lz ->
-    Printf.printf "lazy val %b\n" (Lazy.is_val lz);
-    Printf.printf "lazy load_dir %s\n" (Path.to_string dir);
-    lz
+  | Some load_status -> load_status
+(* match load_status with
+ * | Starting -> die "error in load_dir\n"
+ * | Loading_scheme_deps -> Printf.printf "loading_scheme_deps\n"; return ()
+ * | Ok fut -> fut *)
 
 and is_target t file =
   let dir = Path.parent file in
-  Lazy.force (load_dir t dir ~targeting:file);
-  (* Printf.printf "is_target %s %b\n" (Path.to_string file) (Hashtbl.mem t.files file); *)
-  Hashtbl.mem t.files file
+  let load =
+    match load_dir t dir ~targeting:file with
+    | Running fut -> fut
+    | _ -> die "error is_target\n"
+  in
+  load >>| (fun () ->
+    (* Printf.printf "is_target %s %b\n" (Path.to_string file) (Hashtbl.mem t.files file); *)
+    Hashtbl.mem t.files file)
 
 and wait_for_file t fn ~targeting =
   Printf.printf "wait_for_file %s t:%s\n" (Path.to_string fn) (Path.to_string targeting);
   let dir = Path.parent fn in
-  Lazy.force (load_dir t dir ~targeting);
-  match Hashtbl.find t.files fn with
-  | None ->
-    if Path.is_in_build_dir fn then
-      die "no rule found for %s" (Utils.describe_target fn)
-    else if Path.exists fn then
-      return ()
-    else
-      die "file unavailable: %s" (Path.to_string fn)
-  | Some (File_spec.T file) ->
-    match file.rule.exec with
-    | Not_started { eval_rule; exec_rule } ->
-      file.rule.exec <- Starting { for_file = targeting };
-      let rule_evaluation =
-        wrap_build_errors t ~targeting:fn ~f:eval_rule
-      in
-      let rule_execution =
-        wrap_build_errors t ~targeting:fn ~f:(exec_rule rule_evaluation)
-      in
-      file.rule.exec <-
-        Running { for_file = targeting
-                ; rule_evaluation
-                ; rule_execution
-                };
-      rule_execution
-    | Running { rule_execution; _ } -> rule_execution
-    | Evaluating_rule { for_file; rule_evaluation; exec_rule } ->
-      file.rule.exec <- Starting { for_file = targeting };
-      let rule_execution =
-        wrap_build_errors t ~targeting:fn ~f:(exec_rule rule_evaluation)
-      in
-      file.rule.exec <-
-        Running { for_file
-                ; rule_evaluation
-                ; rule_execution
-                };
-      rule_execution
-    | Starting _ ->
-      (* Recursive deps! *)
-      let rec build_loop acc targeting =
-        let acc = targeting :: acc in
-        if fn = targeting then
-          acc
-        else
-          let (File_spec.T file) = find_file_exn t targeting in
-          match file.rule.exec with
-          | Not_started _ | Running _ | Evaluating_rule _ -> assert false
-          | Starting { for_file } ->
-            build_loop acc for_file
-      in
-      let loop = build_loop [fn] targeting in
-      die "Dependency cycle between the following files:\n    %s"
-        (String.concat ~sep:"\n--> "
-           (List.map loop ~f:Path.to_string))
+  let load =
+    match load_dir t dir ~targeting with
+    | Running fut -> fut
+    | _ -> die "error wait_for_file\n"
+  in
+  load >>= (fun () ->
+    match Hashtbl.find t.files fn with
+    | None ->
+      if Path.is_in_build_dir fn then
+        die "no rule found for %s" (Utils.describe_target fn)
+      else if Path.exists fn then
+        return ()
+      else
+        die "file unavailable: %s" (Path.to_string fn)
+    | Some (File_spec.T file) ->
+      match file.rule.exec with
+      | Not_started { eval_rule; exec_rule } ->
+        file.rule.exec <- Starting { for_file = targeting };
+        let rule_evaluation =
+          wrap_build_errors t ~targeting:fn ~f:eval_rule
+        in
+        let rule_execution =
+          wrap_build_errors t ~targeting:fn ~f:(exec_rule rule_evaluation)
+        in
+        file.rule.exec <-
+          Running { for_file = targeting
+                  ; rule_evaluation
+                  ; rule_execution
+                  };
+        rule_execution
+      | Running { rule_execution; _ } -> rule_execution
+      | Evaluating_rule { for_file; rule_evaluation; exec_rule } ->
+        file.rule.exec <- Starting { for_file = targeting };
+        let rule_execution =
+          wrap_build_errors t ~targeting:fn ~f:(exec_rule rule_evaluation)
+        in
+        file.rule.exec <-
+          Running { for_file
+                  ; rule_evaluation
+                  ; rule_execution
+                  };
+        rule_execution
+      | Starting _ ->
+        (* Recursive deps! *)
+        let rec build_loop acc targeting =
+          let acc = targeting :: acc in
+          if fn = targeting then
+            acc
+          else
+            let (File_spec.T file) = find_file_exn t targeting in
+            match file.rule.exec with
+            | Not_started _ | Running _ | Evaluating_rule _ -> assert false
+            | Starting { for_file } ->
+              build_loop acc for_file
+        in
+        let loop = build_loop [fn] targeting in
+        die "Dependency cycle between the following files:\n    %s"
+          (String.concat ~sep:"\n--> "
+             (List.map loop ~f:Path.to_string)))
 
 and wait_for_deps t deps ~targeting =
   all_unit
@@ -533,15 +565,18 @@ and compile_rule t ?(copy_source=false) pre_rule =
     pre_rule
   in
   let targets = Target.paths target_specs in
+  (* Printf.printf "compile_rule targets:\n"; *)
+  (* Pset.iter targets ~f:(fun t -> Printf.printf "target %s\n" (Path.to_string t)); *)
   let { Build_interpret.Static_deps.
         rule_deps
       ; action_deps = static_deps
       } = Build_interpret.static_deps build ~all_targets_by_dir:t.all_targets_by_dir
   in
-
+  (* Printf.printf "compile_rule\n"; *)
   let eval_rule ~targeting =
     wait_for_deps t rule_deps ~targeting
     >>| fun () ->
+    (* Printf.printf "eval_rule %s\n" (Path.to_string targeting); *)
     Build_exec.exec t build ()
   in
   let exec_rule ~targeting rule_evaluation =
@@ -645,7 +680,10 @@ and compile_rule t ?(copy_source=false) pre_rule =
 and setup_copy_rules t ~all_non_target_source_files ctx_dir =
   Pset.iter all_non_target_source_files ~f:(fun path ->
     let ctx_path = Path.append ctx_dir path in
-    if is_target t ctx_path &&
+    let ctx_dir = Path.parent ctx_path in
+    let ts_of_dir = Pmap.find_default ctx_dir t.all_targets_by_dir ~default:Pset.empty in
+    let is_target = Pset.mem ctx_path ts_of_dir in
+    if is_target &&
        String.is_suffix (Path.basename ctx_path) ~suffix:".install" then
       (* Do not copy over .install files that are generated by a rule. *)
       ()
@@ -732,7 +770,7 @@ let create ~scheme_cb ~contexts ~file_tree =
     ; local_mkdirs = Path.Local.Set.empty
     ; all_targets_by_dir = Pmap.empty
     ; scheme_cb
-    ; dirs_loaded = Pmap.empty
+    ; dirs_load = Pmap.empty
     ; source_files_by_dir
     } in
   (let l = !disabled_fallback_rules in
@@ -810,7 +848,9 @@ let remove_old_artifacts t =
 let do_build_exn t targets =
   (* Printf.printf "do_build_exn\n"; *)
   remove_old_artifacts t;
-  all_unit (List.map targets ~f:(fun fn -> wait_for_file t fn ~targeting:fn))
+  all_unit (List.map targets ~f:(fun fn ->
+    Printf.printf "do_build %s\n" (Path.to_string fn);
+    wait_for_file t fn ~targeting:fn))
 
 let do_build t targets =
   try

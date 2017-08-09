@@ -391,7 +391,8 @@ let resolve_targets ~log common (setup : Main.setup) user_targets =
           if not (Path.is_local path) then
             [File path]
           else if Path.is_in_build_dir path then begin
-            if Build_system.is_target setup.build_system path then
+            (* if Build_system.is_target setup.build_system path then *)
+            if false then
               [File path]
             else
               can't_build path
@@ -400,12 +401,14 @@ let resolve_targets ~log common (setup : Main.setup) user_targets =
               let l =
                 List.filter_map setup.contexts ~f:(fun ctx ->
                     let path = Path.append ctx.Context.build_dir path in
-                    if Build_system.is_target setup.build_system path then
+                    (* if Build_system.is_target setup.build_system path then *)
+                    if true then
                       Some (File path)
                     else
                       None)
               in
-              if Build_system.is_target setup.build_system path ||
+              (* if Build_system.is_target setup.build_system path || *)
+              if false ||
                  Path.exists path then
                 File path :: l
               else

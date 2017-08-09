@@ -10,7 +10,7 @@ val create
   -> file_tree:File_tree.t
   -> t
 
-val is_target : t -> Path.t -> bool
+val is_target : t -> Path.t -> bool Future.t
 
 module Build_error : sig
   type t
