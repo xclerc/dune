@@ -402,14 +402,13 @@ let rec load_rule_dir_deps t rule ~targeting =
   let {Pre_rule.build; _} = rule in
   let dir_deps = Build_interpret.dir_deps build in
   List.iter dir_deps ~f:(fun dir ->
-    Printf.printf "Dir dep %s\n" (Path.to_string dir);
     ignore (load_dir t dir ~targeting))
 
 and load_dir t dir ~targeting =
   match Pmap.find dir t.dirs_load with
   | None ->
   begin
-    Printf.printf "load_dir %s\n" (Path.to_string dir);
+    (* Printf.printf "load_dir %s\n" (Path.to_string dir); *)
     t.dirs_load <- Pmap.add t.dirs_load ~key:dir ~data:Load_dir_status.Starting;
     let load =
       let scheme = t.scheme_cb dir in
@@ -465,7 +464,7 @@ and is_target t file =
     Hashtbl.mem t.files file)
 
 and wait_for_file t fn ~targeting =
-  Printf.printf "wait_for_file %s t:%s\n" (Path.to_string fn) (Path.to_string targeting);
+  (* Printf.printf "wait_for_file %s t:%s\n" (Path.to_string fn) (Path.to_string targeting); *)
   let dir = Path.parent fn in
   let load =
     match load_dir t dir ~targeting with

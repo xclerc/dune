@@ -43,11 +43,9 @@ let static_deps t ~all_targets_by_dir =
         | G_evaluated l ->
           { acc with action_deps = Pset.union acc.action_deps (Pset.of_list l) }
         | G_unevaluated (dir, re) ->
-          Printf.printf "uneval %s\n" (Path.to_string dir);
           match Pmap.find dir all_targets_by_dir with
-          | None -> Printf.printf "none static dep glob\n"; acc
+          | None -> acc
           | Some targets ->
-            Printf.printf "some static dep glob\n";
             let result =
               Pset.filter targets ~f:(fun path ->
                 Re.execp re (Path.basename path))
