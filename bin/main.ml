@@ -369,55 +369,56 @@ let target_hint (setup : Main.setup) path =
 
 let resolve_targets ~log common (setup : Main.setup) user_targets =
   match user_targets with
-  | [] -> []
+  | [] -> Future.return []
   | _ ->
-    let targets =
-      List.concat_map user_targets ~f:(fun s ->
-        if String.is_prefix s ~prefix:"@" then
-          let s = String.sub s ~pos:1 ~len:(String.length s - 1) in
-          let path = Path.relative Path.root (prefix_target common s) in
-          if Path.is_root path then
-            die "@@ on the command line must be followed by a valid alias name"
-          else
-            let dir = Path.parent path in
-            let name = Path.basename path in
-            [Alias (path, Alias.make ~dir name)]
-        else
-          let path = Path.relative Path.root (prefix_target common s) in
-          let can't_build path =
-            die "Don't know how to build %s%s" (Path.to_string path)
-              (target_hint setup path)
-          in
-          if not (Path.is_local path) then
-            [File path]
-          else if Path.is_in_build_dir path then begin
-            (* if Build_system.is_target setup.build_system path then *)
-            if false then
-              [File path]
-            else
-              can't_build path
-          end else
-            match
-              let l =
-                List.filter_map setup.contexts ~f:(fun ctx ->
-                    let path = Path.append ctx.Context.build_dir path in
-                    (* if Build_system.is_target setup.build_system path then *)
-                    if true then
-                      Some (File path)
-                    else
-                      None)
-              in
-              (* if Build_system.is_target setup.build_system path || *)
-              if false ||
-                 Path.exists path then
-                File path :: l
-              else
-                l
-            with
-            | [] -> can't_build path
-            | l  -> l
-        )
-    in
+    Future.all
+      (List.map user_targets ~f:(fun s ->
+         if String.is_prefix s ~prefix:"@" then
+           let s = String.sub s ~pos:1 ~len:(String.length s - 1) in
+           let path = Path.relative Path.root (prefix_target common s) in
+           if Path.is_root path then
+             die "@@ on the command line must be followed by a valid alias name"
+           else
+             let dir = Path.parent path in
+             let name = Path.basename path in
+             Future.return [Alias (path, Alias.make ~dir name)]
+         else
+           let path = Path.relative Path.root (prefix_target common s) in
+           let can't_build path =
+             die "Don't know how to build %s%s" (Path.to_string path)
+               (target_hint setup path)
+           in
+           if not (Path.is_local path) then
+             Future.return [File path]
+           else if Path.is_in_build_dir path then begin
+             Build_system.is_target setup.build_system path
+             >>| fun is_target ->
+             if is_target then
+               [File path]
+             else
+               can't_build path
+           end else
+             Future.filter_map setup.contexts ~f:(fun ctx ->
+               let path = Path.append ctx.Context.build_dir path in
+               Build_system.is_target setup.build_system path
+               >>| fun is_target ->
+               if is_target then
+                 Some (File path)
+               else
+                 None)
+             >>= fun l ->
+             Future.both (Future.return l) (Build_system.is_target setup.build_system path)
+             >>| (fun (l, is_target) ->
+               if is_target || Path.exists path then
+                 File path :: l
+               else
+                 l)
+             >>| fun l ->
+             match l with
+             | [] -> can't_build path
+             | l  -> l))
+    >>| fun targets ->
+    let targets = List.concat targets in
     if !Clflags.verbose then begin
       Log.info log "Actual targets:";
       List.iter targets ~f:(function
@@ -445,7 +446,8 @@ let build_targets =
     let log = Log.create () in
     Future.Scheduler.go ~log
       (Main.setup ~log common >>= fun setup ->
-       let targets = resolve_targets ~log common setup targets in
+       resolve_targets ~log common setup targets
+         >>= fun targets ->
        do_build setup targets) in
   ( Term.(const go
           $ common
@@ -524,7 +526,8 @@ let external_lib_deps =
     Future.Scheduler.go ~log
       (Main.setup ~log common ~filter_out_optional_stanzas_with_missing_deps:false
        >>= fun setup ->
-       let targets = resolve_targets ~log common setup targets in
+       resolve_targets ~log common setup targets
+       >>= fun targets ->
        let failure =
          String_map.fold ~init:false
            (Build_system.all_lib_deps_by_context setup.build_system targets)
@@ -628,9 +631,10 @@ let rules =
        >>= fun setup ->
        let targets =
          match targets with
-         | [] -> Build_system.all_targets setup.build_system
+         | [] -> Future.return (Build_system.all_targets setup.build_system)
          | _  -> resolve_targets ~log common setup targets
        in
+       targets >>= fun targets ->
        Build_system.build_rules setup.build_system targets ~recursive >>= fun rules ->
        let print oc =
          let ppf = Format.formatter_of_out_channel oc in
@@ -918,8 +922,10 @@ let utop =
       (Main.setup ~log common >>= fun setup ->
        let context = Main.find_context_exn setup ~name:ctx_name in
        let setup = { setup with contexts = [context] } in
+       resolve_targets ~log common setup [utop_target]
+       >>= fun resolve_targets ->
        let target =
-         match resolve_targets ~log common setup [utop_target] with
+         match resolve_targets with
          | [] -> die "no libraries defined in %s" dir
          | [target] -> target
          | _::_::_ -> assert false

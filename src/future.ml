@@ -663,3 +663,13 @@ module Scheduler = struct
     let cwd = Sys.getcwd () in
     go_rec cwd log t
 end
+
+let rec filter_map l ~f =
+  match l with
+  | [] -> return []
+  | hd :: tl ->
+    both (f hd) (filter_map tl ~f)
+    >>| fun (hd, tl) ->
+    match hd with
+    | None -> tl
+    | Some hd -> hd :: tl

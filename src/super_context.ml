@@ -246,7 +246,6 @@ let add_rule t ?sandbox ?fallback ?loc build =
 
 let add_include t dir include_scheme =
   let open Scheme.O in
-  Printf.printf "add_include %s\n" (Path.to_string dir);
   t.schemes <-
     let scheme =
       match Path.Map.find dir t.schemes with

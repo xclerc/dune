@@ -15,6 +15,8 @@ val all_unit : unit t list -> unit t
 
 val with_exn_handler : (unit -> 'a) -> handler:(exn -> Printexc.raw_backtrace -> unit) -> 'a
 
+val filter_map : 'a list -> f:('a -> 'b Option.t t) -> 'b list t
+
 type accepted_codes =
   | These of int list
   | All
