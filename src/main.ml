@@ -49,11 +49,12 @@ let setup ?(log=Log.no_log) ?filter_out_optional_stanzas_with_missing_deps
     ?only_packages
     ?filter_out_optional_stanzas_with_missing_deps
   >>= fun (schemes, stanzas) ->
+  let all_scheme_dirs = Path.Set.of_list (Path.Map.keys schemes) in
   let build_system = Build_system.create ~scheme_cb:(fun path ->
     match Path.Map.find path schemes with
     | None -> Scheme.empty ()
     | Some s -> s)
-    ~contexts ~file_tree:conf.file_tree in
+    ~contexts ~file_tree:conf.file_tree ~all_scheme_dirs in
   return { build_system
          ; stanzas
          ; contexts
@@ -74,9 +75,10 @@ let external_lib_deps ?log ~packages () =
      | None -> die "You need to set a default context to use external-lib-deps"
      | Some stanzas ->
        let internals = Jbuild.Stanzas.lib_names stanzas in
+       Build_system.all_lib_deps setup.build_system install_files
+       >>| fun all_lib_deps ->
        Path.Map.map
-         (Build_system.all_lib_deps setup.build_system install_files)
-         ~f:(String_map.filter ~f:(fun name _ ->
+         all_lib_deps ~f:(String_map.filter ~f:(fun name _ ->
            not (String_set.mem name internals))))
 
 (* Return [true] if the backtrace was printed *)

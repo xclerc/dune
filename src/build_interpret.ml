@@ -203,8 +203,11 @@ module Rule = struct
         match acc with
         | None -> Some dir
         | Some d ->
-          assert ((Path.compare d dir) = 0);
-          Some dir)
+          if (Path.compare d dir) <> 0 then
+            die "Rule has targets in different dirs: %s %s\n"
+              (Path.to_string d) (Path.to_string dir)
+          else
+            Some dir)
     in
     Option.value_exn target_dir
 end

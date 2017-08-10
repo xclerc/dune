@@ -345,7 +345,8 @@ type target =
 let target_hint (setup : Main.setup) path =
   assert (Path.is_local path);
   let sub_dir = Path.parent path in
-  let candidates = Build_system.all_targets setup.build_system in
+  Build_system.all_targets setup.build_system
+  >>| fun candidates ->
   let candidates =
     if Path.is_in_build_dir path then
       candidates
@@ -385,16 +386,16 @@ let resolve_targets ~log common (setup : Main.setup) user_targets =
          else
            let path = Path.relative Path.root (prefix_target common s) in
            let can't_build path =
-             die "Don't know how to build %s%s" (Path.to_string path)
-               (target_hint setup path)
+             target_hint setup path >>| fun hint ->
+             die "Don't know how to build %s%s" (Path.to_string path) hint
            in
            if not (Path.is_local path) then
              Future.return [File path]
            else if Path.is_in_build_dir path then begin
              Build_system.is_target setup.build_system path
-             >>| fun is_target ->
+             >>= fun is_target ->
              if is_target then
-               [File path]
+               Future.return [File path]
              else
                can't_build path
            end else
@@ -413,10 +414,9 @@ let resolve_targets ~log common (setup : Main.setup) user_targets =
                  File path :: l
                else
                  l)
-             >>| fun l ->
-             match l with
+             >>= function
              | [] -> can't_build path
-             | l  -> l))
+             | l  -> Future.return l))
     >>| fun targets ->
     let targets = List.concat targets in
     if !Clflags.verbose then begin
@@ -528,70 +528,69 @@ let external_lib_deps =
        >>= fun setup ->
        resolve_targets ~log common setup targets
        >>= fun targets ->
-       let failure =
-         String_map.fold ~init:false
-           (Build_system.all_lib_deps_by_context setup.build_system targets)
-           ~f:(fun ~key:context_name ~data:lib_deps acc ->
-             let internals =
-               Jbuild.Stanzas.lib_names
-                 (match String_map.find context_name setup.Main.stanzas with
-                  | None -> assert false
-                  | Some x -> x)
+       Build_system.all_lib_deps_by_context setup.build_system targets
+       >>| fun all_lib_deps_by_context ->
+       let failure = String_map.fold ~init:false
+         all_lib_deps_by_context ~f:(fun ~key:context_name ~data:lib_deps acc ->
+           let internals =
+             Jbuild.Stanzas.lib_names
+               (match String_map.find context_name setup.Main.stanzas with
+                | None -> assert false
+                | Some x -> x)
+           in
+           let externals =
+             String_map.filter lib_deps ~f:(fun name _ ->
+               not (String_set.mem name internals))
+           in
+           if only_missing then begin
+             let context =
+               match List.find setup.contexts ~f:(fun c -> c.name = context_name) with
+               | None -> assert false
+               | Some c -> c
              in
-             let externals =
-               String_map.filter lib_deps ~f:(fun name _ ->
-                 not (String_set.mem name internals))
+             let missing =
+               String_map.filter externals ~f:(fun name _ ->
+                 not (Findlib.available context.findlib name ~required_by:[]))
              in
-             if only_missing then begin
-               let context =
-                 match List.find setup.contexts ~f:(fun c -> c.name = context_name) with
-                 | None -> assert false
-                 | Some c -> c
-               in
-               let missing =
-                 String_map.filter externals ~f:(fun name _ ->
-                   not (Findlib.available context.findlib name ~required_by:[]))
-               in
-               if String_map.is_empty missing then
-                 acc
-               else if String_map.for_all missing ~f:(fun _ kind -> kind = Build.Optional)
-               then begin
-                 Format.eprintf
-                   "@{<error>Error@}: The following libraries are missing \
-                    in the %s context:\n\
-                    %s@."
-                   context_name
-                   (format_external_libs missing);
-                 false
-               end else begin
-                 Format.eprintf
-                   "@{<error>Error@}: The following libraries are missing \
-                    in the %s context:\n\
-                    %s\n\
-                    Hint: try: opam install %s@."
-                   context_name
-                   (format_external_libs missing)
-                   (String_map.bindings missing
-                    |> List.filter_map ~f:(fun (name, kind) ->
-                      match (kind : Build.lib_dep_kind) with
-                      | Optional -> None
-                      | Required -> Some (Findlib.root_package_name name))
-                    |> String_set.of_list
-                    |> String_set.elements
-                    |> String.concat ~sep:" ");
-                 true
-               end
-             end else begin
-               Printf.printf
-                 "These are the external library dependencies in the %s context:\n\
-                  %s\n%!"
-                 context_name
-                 (format_external_libs externals);
+             if String_map.is_empty missing then
                acc
-             end)
+             else if String_map.for_all missing ~f:(fun _ kind -> kind = Build.Optional)
+             then begin
+               Format.eprintf
+                 "@{<error>Error@}: The following libraries are missing \
+                  in the %s context:\n\
+                  %s@."
+                 context_name
+                 (format_external_libs missing);
+               false
+             end else begin
+               Format.eprintf
+                 "@{<error>Error@}: The following libraries are missing \
+                  in the %s context:\n\
+                  %s\n\
+                  Hint: try: opam install %s@."
+                 context_name
+                 (format_external_libs missing)
+                 (String_map.bindings missing
+                  |> List.filter_map ~f:(fun (name, kind) ->
+                    match (kind : Build.lib_dep_kind) with
+                    | Optional -> None
+                    | Required -> Some (Findlib.root_package_name name))
+                  |> String_set.of_list
+                  |> String_set.elements
+                  |> String.concat ~sep:" ");
+               true
+             end
+           end else begin
+             Printf.printf
+               "These are the external library dependencies in the %s context:\n\
+                %s\n%!"
+               context_name
+               (format_external_libs externals);
+             acc
+           end)
        in
-       if failure then die "";
-       Future.return ())
+       if failure then die "")
   in
   ( Term.(const go
           $ common
@@ -631,7 +630,7 @@ let rules =
        >>= fun setup ->
        let targets =
          match targets with
-         | [] -> Future.return (Build_system.all_targets setup.build_system)
+         | [] -> Build_system.all_targets setup.build_system
          | _  -> resolve_targets ~log common setup targets
        in
        targets >>= fun targets ->

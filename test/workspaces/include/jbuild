@@ -1,0 +1,6 @@
+(rule
+  ((targets (b))
+   (deps    (a))
+   (action  (copy a b))))
+
+(include d/b.jbuild)

@@ -24,7 +24,7 @@ val external_lib_deps
   : ?log:Log.t
   -> packages:string list
   -> unit
-  -> Build.lib_deps Path.Map.t
+  -> Build.lib_deps Path.Map.t Future.t
 val report_error : ?map_fname:(string -> string) -> Format.formatter -> exn -> unit
 
 val bootstrap : unit -> unit
