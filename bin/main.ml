@@ -445,9 +445,12 @@ let build_targets =
     set_common common ~targets;
     let log = Log.create () in
     Future.Scheduler.go ~log
-      (Main.setup ~log common >>= fun setup ->
+      (Printf.printf "build_targets go\n";
+       Main.setup ~log common >>= fun setup ->
+       Printf.printf "resolve targets\n";
        resolve_targets ~log common setup targets
-         >>= fun targets ->
+       >>= fun targets ->
+       Printf.printf "build targets\n";
        do_build setup targets) in
   ( Term.(const go
           $ common
