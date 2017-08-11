@@ -1,0 +1,4 @@
+(rule
+  ((targets (b))
+   (deps    (../t/x))
+   (action  (copy ../t/x b))))

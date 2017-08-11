@@ -1,0 +1,6 @@
+(rule
+  ((targets (x))
+   (deps    (a/b b/a))
+   (action (progn
+     (copy a/b x)
+       (copy b/a x)))))

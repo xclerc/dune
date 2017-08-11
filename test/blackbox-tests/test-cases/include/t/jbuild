@@ -1,0 +1,7 @@
+(rule
+ ((targets (b.jbuild))
+  (deps (c.jbuild))
+  (action (progn (system "sleep 0.1")
+           (copy c.jbuild b.jbuild)))))
+
+(include b.jbuild)

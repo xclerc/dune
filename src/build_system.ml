@@ -5,21 +5,36 @@ module Pset  = Path.Set
 module Pmap  = Path.Map
 module Vspec = Build.Vspec
 
+module Targeting = struct
+  type t =
+    | Dir of Path.t
+    | File of Path.t
+  let path = function
+    | Dir p | File p -> p
+  let to_string t =
+    Path.to_string (path t)
+  let equal t1 t2 =
+    match t1, t2 with
+    | Dir p1, Dir p2 -> (Path.compare p1 p2) = 0
+    | File p1, File p2 -> (Path.compare p1 p2) = 0
+    | _ -> false
+end
+
 module Exec_status = struct
   module Starting = struct
-    type t = { for_file : Path.t }
+    type t = { for_file : Targeting.t }
   end
   module Evaluating_rule = struct
     type t =
-      { for_file        : Path.t
+      { for_file        : Targeting.t
       ; rule_evaluation : (Action.t * Pset.t) Future.t
-      ; exec_rule       : targeting:Path.t
+      ; exec_rule       : targeting:Targeting.t
           -> (Action.t * Pset.t) Future.t -> unit Future.t
       }
   end
   module Running = struct
     type t =
-      { for_file        : Path.t
+      { for_file        : Targeting.t
       ; (* Future that only waits for the evaluation of the rule to terminate. It holds
            the computed action and dynamic dependencies. *)
         rule_evaluation : (Action.t * Pset.t) Future.t
@@ -29,8 +44,8 @@ module Exec_status = struct
   end
   module Not_started = struct
     type t =
-      { eval_rule : targeting:Path.t -> (Action.t * Pset.t) Future.t
-      ; exec_rule : targeting:Path.t -> (Action.t * Pset.t) Future.t -> unit Future.t
+      { eval_rule : targeting:Targeting.t -> (Action.t * Pset.t) Future.t
+      ; exec_rule : targeting:Targeting.t -> (Action.t * Pset.t) Future.t -> unit Future.t
       }
   end
   type t =
@@ -159,19 +174,25 @@ module Build_error = struct
 
   let raise t ~targeting ~backtrace exn =
     let rec build_path acc targeting ~seen =
-      assert (not (Pset.mem targeting seen));
-      let seen = Pset.add targeting seen in
-      let (File_spec.T file) = find_file_exn t targeting in
-      match file.rule.exec with
-      | Not_started _ -> assert false
-      | Running { for_file; _ } | Starting { for_file }
-      | Evaluating_rule { for_file; _ } ->
-        if for_file = targeting then
-          acc
-        else
-          build_path (for_file :: acc) for_file ~seen
+      assert (not (Pset.mem (Targeting.path targeting) seen));
+      let seen = Pset.add (Targeting.path targeting) seen in
+      match targeting with
+      | File targeting ->
+        begin
+          let (File_spec.T file) = find_file_exn t targeting in
+          match file.rule.exec with
+          | Not_started _ -> assert false
+          | Running { for_file; _ } | Starting { for_file }
+          | Evaluating_rule { for_file; _ } ->
+            if (Targeting.path for_file) = targeting then
+              acc
+            else
+              build_path (for_file :: acc) for_file ~seen
+        end
+      | Dir _ -> acc
     in
     let dep_path = build_path [targeting] targeting ~seen:Pset.empty in
+    let dep_path = List.map dep_path ~f:Targeting.path in
     raise (E { backtrace; dep_path; exn })
 end
 
@@ -449,7 +470,7 @@ and load_dir t dir ~targeting =
 and is_target t file =
   let dir = Path.parent file in
   let load =
-    match load_dir t dir ~targeting:file with
+    match load_dir t dir ~targeting:(Targeting.File file) with
     | Running fut -> fut
     | _ -> die "error is_target\n"
   in
@@ -467,21 +488,21 @@ and wait_for_file t fn ~targeting =
   load >>= fun () ->
   match Hashtbl.find t.files fn with
   | None ->
-    if Path.is_in_build_dir fn then
-      die "no rule found for %s" (Utils.describe_target fn)
+    if Path.is_in_build_dir fn then begin
+      die "no rule found for %s" (Utils.describe_target fn) end
     else if Path.exists fn then
       return ()
-    else
-      die "file unavailable: %s" (Path.to_string fn)
+    else begin
+      die "file unavailable: %s" (Path.to_string fn) end
   | Some (File_spec.T file) ->
     match file.rule.exec with
     | Not_started { eval_rule; exec_rule } ->
       file.rule.exec <- Starting { for_file = targeting };
       let rule_evaluation =
-        wrap_build_errors t ~targeting:fn ~f:eval_rule
+        wrap_build_errors t ~targeting:(Targeting.File fn) ~f:eval_rule
       in
       let rule_execution =
-        wrap_build_errors t ~targeting:fn ~f:(exec_rule rule_evaluation)
+        wrap_build_errors t ~targeting:(Targeting.File fn) ~f:(exec_rule rule_evaluation)
       in
       file.rule.exec <-
         Running { for_file = targeting
@@ -493,7 +514,7 @@ and wait_for_file t fn ~targeting =
     | Evaluating_rule { for_file; rule_evaluation; exec_rule } ->
       file.rule.exec <- Starting { for_file = targeting };
       let rule_execution =
-        wrap_build_errors t ~targeting:fn ~f:(exec_rule rule_evaluation)
+        wrap_build_errors t ~targeting:(Targeting.File fn) ~f:(exec_rule rule_evaluation)
       in
       file.rule.exec <-
         Running { for_file
@@ -505,19 +526,24 @@ and wait_for_file t fn ~targeting =
       (* Recursive deps! *)
       let rec build_loop acc targeting =
         let acc = targeting :: acc in
-        if fn = targeting then
+        if Targeting.equal (Targeting.File fn) targeting then
           acc
         else
-          let (File_spec.T file) = find_file_exn t targeting in
-          match file.rule.exec with
-          | Not_started _ | Running _ | Evaluating_rule _ -> assert false
-          | Starting { for_file } ->
-            build_loop acc for_file
+          match targeting with
+          | File targeting ->
+            begin
+              let (File_spec.T file) = find_file_exn t targeting in
+              match file.rule.exec with
+              | Not_started _ | Running _ | Evaluating_rule _ -> assert false
+              | Starting { for_file } ->
+                build_loop acc for_file
+            end
+          | Dir _targeting -> assert false
       in
-      let loop = build_loop [fn] targeting in
+      let loop = build_loop [(Targeting.File fn)] targeting in
       die "Dependency cycle between the following files:\n    %s"
         (String.concat ~sep:"\n--> "
-           (List.map loop ~f:Path.to_string))
+           (List.map loop ~f:Targeting.to_string))
 
 and wait_for_deps t deps ~targeting =
   all_unit
@@ -688,7 +714,7 @@ and setup_copy_rules t ~all_non_target_source_files ctx_dir =
 let all_targets t =
   Pset.fold t.all_scheme_dirs ~init:(return ()) ~f:(fun dir fut ->
     fut >>= fun () ->
-    match load_dir t dir ~targeting:dir with
+    match load_dir t dir ~targeting:(Targeting.Dir dir) with
     | Running fut -> fut
     | _ -> die "all_targets error\n")
   >>| fun () ->
@@ -823,7 +849,7 @@ let remove_old_artifacts t =
 let do_build_exn t targets =
   remove_old_artifacts t;
   all_unit (List.map targets ~f:(fun fn ->
-    wait_for_file t fn ~targeting:fn))
+    wait_for_file t fn ~targeting:(Targeting.File fn)))
 
 let do_build t targets =
   try
@@ -837,7 +863,7 @@ let rules_for_files t paths =
   List.fold_left paths ~init:(return ()) ~f:(fun fut path ->
     fut >>= fun () ->
     let dir = Path.parent path in
-    match load_dir t dir ~targeting:path with
+    match load_dir t dir ~targeting:(Targeting.File path) with
     | Running fut -> fut
     | _ -> die "rules_for_files error\n")
   >>| fun () ->
@@ -941,7 +967,7 @@ let build_rules t ?(recursive=false) targets =
   let rec loop fn =
     let dir = Path.parent fn in
     let load =
-      match load_dir t dir ~targeting:fn with
+      match load_dir t dir ~targeting:(Targeting.File fn) with
       | Running fut -> fut
       | _ -> die "error build_rules\n"
     in
@@ -969,12 +995,12 @@ let build_rules t ?(recursive=false) targets =
           | Running { rule_evaluation; _ } | Evaluating_rule { rule_evaluation; _ } ->
             make_rule rule_evaluation
           | Not_started { eval_rule; exec_rule } ->
-            ir.exec <- Starting { for_file = fn };
+            ir.exec <- Starting { for_file = (Targeting.File fn) };
             let rule_evaluation =
-              wrap_build_errors t ~targeting:fn ~f:eval_rule
+              wrap_build_errors t ~targeting:(Targeting.File fn) ~f:eval_rule
             in
             ir.exec <-
-              Evaluating_rule { for_file = fn
+              Evaluating_rule { for_file = (Targeting.File fn)
                               ; rule_evaluation
                               ; exec_rule
                               };

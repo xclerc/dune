@@ -1,0 +1,4 @@
+(rule
+ ((targets (b.jbuild))
+  (deps (a/x))
+  (action (copy a/x b.jbuild))))

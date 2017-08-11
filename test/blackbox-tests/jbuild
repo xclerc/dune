@@ -64,3 +64,17 @@
   (action
    (chdir test-cases/lib-available
     (setenv JBUILDER ${bin:jbuilder} (run ${exe:cram.exe} run.t))))))
+
+(alias
+ ((name runtest)
+  (deps ((files_recursively_in test-cases/include)))
+  (action
+   (chdir test-cases/include
+    (setenv JBUILDER ${bin:jbuilder} (run ${exe:cram.exe} run.t))))))
+
+(alias
+ ((name runtest)
+  (deps ((files_recursively_in test-cases/include-loop)))
+  (action
+   (chdir test-cases/include-loop
+    (setenv JBUILDER ${bin:jbuilder} (run ${exe:cram.exe} run.t))))))
