@@ -29,7 +29,7 @@ module Exec_status = struct
       { for_file        : Targeting.t
       ; rule_evaluation : (Action.t * Pset.t) Future.t
       ; exec_rule       : targeting:Targeting.t
-          -> (Action.t * Pset.t) Future.t -> unit Future.t
+          -> don't_load_dirs:Pset.t -> (Action.t * Pset.t) Future.t -> unit Future.t
       }
   end
   module Running = struct
@@ -44,8 +44,8 @@ module Exec_status = struct
   end
   module Not_started = struct
     type t =
-      { eval_rule : targeting:Targeting.t -> (Action.t * Pset.t) Future.t
-      ; exec_rule : targeting:Targeting.t -> (Action.t * Pset.t) Future.t -> unit Future.t
+      { eval_rule : targeting:Targeting.t -> don't_load_dirs:Pset.t -> (Action.t * Pset.t) Future.t
+      ; exec_rule : targeting:Targeting.t -> don't_load_dirs:Pset.t -> (Action.t * Pset.t) Future.t -> unit Future.t
       }
   end
   type t =
@@ -179,7 +179,6 @@ module Build_error = struct
       match targeting with
       | File targeting ->
         begin
-          Printf.printf "raise %s\n" (Path.to_string targeting);
           let (File_spec.T file) = find_file_exn t targeting in
           match file.rule.exec with
           | Not_started _ -> acc  (* this was assert false before *)
@@ -197,8 +196,8 @@ module Build_error = struct
     raise (E { backtrace; dep_path; exn })
 end
 
-let wrap_build_errors t ~f ~targeting =
-  with_exn_handler (fun () -> f ~targeting)
+let wrap_build_errors t ~f ~targeting ~don't_load_dirs =
+  with_exn_handler (fun () -> f ~targeting ~don't_load_dirs)
     ~handler:(fun exn backtrace ->
       match exn with
       | Build_error.E _ -> reraise exn
@@ -417,17 +416,16 @@ let add_targets t targets =
       in
       t.all_targets_by_dir <- Pmap.add ~key:dir ~data:targets t.all_targets_by_dir)
 
-let rec load_rule_dir_deps t rule ~targeting =
+let rec load_rule_dir_deps t rule ~targeting ~don't_load_dirs =
   let {Pre_rule.build; _} = rule in
   let dir_deps = Build_interpret.dir_deps build in
   List.iter dir_deps ~f:(fun dir ->
-    ignore (load_dir t dir ~targeting))
+    ignore (load_dir t dir ~targeting ~don't_load_dirs))
 
-and load_dir t dir ~targeting =
+and load_dir t dir ~targeting ~don't_load_dirs =
   match Pmap.find dir t.dirs_load with
   | None ->
     begin
-      Printf.printf "load_dir %s\n" (Path.to_string dir);
       t.dirs_load <- Pmap.add t.dirs_load ~key:dir ~data:Load_dir_status.Starting;
       let load =
         let scheme = t.scheme_cb dir in
@@ -451,50 +449,47 @@ and load_dir t dir ~targeting =
               ctx_dir
         in
         add_targets t copy_targets;
-        List.iter rules ~f:(load_rule_dir_deps t ~targeting);
+        List.iter rules ~f:(load_rule_dir_deps t ~targeting ~don't_load_dirs);
         List.iter rules ~f:(compile_rule t ~copy_source:false);
         setup_copy_rules t ~all_non_target_source_files:copy_sources ctx_dir;
 
         t.dirs_load <- Pmap.add t.dirs_load ~key:dir ~data:Load_dir_status.Loading_scheme_deps;
         let deps = get_scheme_deps scheme in
-        wait_for_deps t (Pset.of_list deps) ~targeting
+        wait_for_deps t (Pset.of_list deps) ~targeting ~don't_load_dirs:(Pset.add dir don't_load_dirs)
         >>| (fun () ->
-          Printf.printf "load_dir dyn rules1 %s\n" (Path.to_string dir);
           let dyn_rules = get_scheme_dyn_rules scheme in
-          Printf.printf "load_dir dyn rules2 %s\n" (Path.to_string dir);
           let targets = rule_targets dyn_rules in
-          Printf.printf "load_dir dyn rules3 %s\n" (Path.to_string dir);
           add_targets t targets;
           List.iter dyn_rules ~f:(compile_rule t ~copy_source:false))
       in
-      Printf.printf "load_dir2 %s\n" (Path.to_string dir);
       t.dirs_load <- Pmap.add t.dirs_load ~key:dir ~data:(Load_dir_status.Running load);
       Load_dir_status.Running load
     end
   | Some load_status -> load_status
 
 and is_target t file =
-  Printf.printf "is_target %s\n" (Path.to_string file);
   let dir = Path.parent file in
   let load =
-    match load_dir t dir ~targeting:(Targeting.File file) with
+    match load_dir t dir ~targeting:(Targeting.File file) ~don't_load_dirs:Pset.empty with
     | Running fut -> fut
     | _ -> die "error is_target\n"
   in
   load >>| (fun () ->
     Hashtbl.mem t.files file)
 
-and wait_for_file t fn ~targeting =
-  Printf.printf "wait_for_file %s\n" (Path.to_string fn);
+and wait_for_file t fn ~targeting ~don't_load_dirs =
   let dir = Path.parent fn in
   let load =
-    match load_dir t dir ~targeting with
-    | Running fut -> Printf.printf "fut %s\n" (Path.to_string fn); fut
-    | Loading_scheme_deps -> Printf.printf "ls %s\n" (Path.to_string fn); return ()
-    | _ -> die "error wait_for_file\n"
+    if Pset.mem dir don't_load_dirs then begin
+      return ()
+    end
+    else begin
+      match load_dir t dir ~targeting ~don't_load_dirs with
+      | Running fut -> fut
+      | _ -> die "error wait_for_file\n"
+    end
   in
   load >>= fun () ->
-  Printf.printf "wait_for_file cont %s\n" (Path.to_string fn);
   match Hashtbl.find t.files fn with
   | None ->
     if Path.is_in_build_dir fn then begin
@@ -506,26 +501,24 @@ and wait_for_file t fn ~targeting =
   | Some (File_spec.T file) ->
     match file.rule.exec with
     | Not_started { eval_rule; exec_rule } ->
-      Printf.printf "not started %s\n" (Path.to_string fn);
       file.rule.exec <- Starting { for_file = targeting };
       let rule_evaluation =
-        wrap_build_errors t ~targeting:(Targeting.File fn) ~f:eval_rule
+        wrap_build_errors t ~targeting:(Targeting.File fn) ~don't_load_dirs ~f:eval_rule
       in
       let rule_execution =
-        wrap_build_errors t ~targeting:(Targeting.File fn) ~f:(exec_rule rule_evaluation)
+        wrap_build_errors t ~targeting:(Targeting.File fn) ~don't_load_dirs ~f:(exec_rule rule_evaluation)
       in
       file.rule.exec <-
         Running { for_file = targeting
                 ; rule_evaluation
                 ; rule_execution
                 };
-      Printf.printf "now started %s\n" (Path.to_string fn);
       rule_execution
     | Running { rule_execution; _ } -> rule_execution
     | Evaluating_rule { for_file; rule_evaluation; exec_rule } ->
       file.rule.exec <- Starting { for_file = targeting };
       let rule_execution =
-        wrap_build_errors t ~targeting:(Targeting.File fn) ~f:(exec_rule rule_evaluation)
+        wrap_build_errors t ~targeting:(Targeting.File fn) ~don't_load_dirs ~f:(exec_rule rule_evaluation)
       in
       file.rule.exec <-
         Running { for_file
@@ -556,9 +549,10 @@ and wait_for_file t fn ~targeting =
         (String.concat ~sep:"\n--> "
            (List.map loop ~f:Targeting.to_string))
 
-and wait_for_deps t deps ~targeting =
+and wait_for_deps t deps ~targeting ~don't_load_dirs =
   all_unit
-    (Pset.fold deps ~init:[] ~f:(fun fn acc -> wait_for_file t fn ~targeting :: acc))
+    (Pset.fold deps ~init:[] ~f:(fun fn acc ->
+       wait_for_file t fn ~targeting ~don't_load_dirs :: acc))
 
 and make_local_dirs t paths =
   Pset.iter paths ~f:(fun path ->
@@ -598,25 +592,20 @@ and compile_rule t ?(copy_source=false) pre_rule =
       ; action_deps = static_deps
       } = Build_interpret.static_deps build ~all_targets_by_dir:t.all_targets_by_dir
   in
-  let eval_rule ~targeting =
-    wait_for_deps t rule_deps ~targeting
+  let eval_rule ~targeting ~don't_load_dirs =
+    wait_for_deps t rule_deps ~targeting ~don't_load_dirs
     >>| fun () ->
-    Printf.printf "eval rule exec start %s\n" (Targeting.to_string targeting);
-    let r = Build_exec.exec t build () in
-    Printf.printf "eval rule exec end %s\n" (Targeting.to_string targeting);
-    r
+    Build_exec.exec t build ()
   in
-  let exec_rule ~targeting rule_evaluation =
-    Printf.printf "exec_rule 0 %s\n" (Targeting.to_string targeting);
+  let exec_rule ~targeting ~don't_load_dirs rule_evaluation =
     make_local_parent_dirs t targets ~map_path:(fun x -> x);
     Future.both
-      (wait_for_deps t static_deps ~targeting)
+      (wait_for_deps t static_deps ~targeting ~don't_load_dirs)
       (rule_evaluation >>= fun (action, dyn_deps) ->
-       wait_for_deps t ~targeting (Pset.diff dyn_deps static_deps)
+       wait_for_deps t ~targeting (Pset.diff dyn_deps static_deps) ~don't_load_dirs
        >>| fun () ->
        (action, dyn_deps))
     >>= fun ((), (action, dyn_deps)) ->
-    Printf.printf "exec_rule 1 %s\n" (Targeting.to_string targeting);
     let all_deps = Pset.union static_deps dyn_deps in
     let all_deps_as_list = Pset.elements all_deps in
     let targets_as_list  = Pset.elements targets  in
@@ -680,9 +669,7 @@ and compile_rule t ?(copy_source=false) pre_rule =
           action
       in
       make_local_dirs t (Action.chdirs action);
-      Printf.printf "exec rule action exec start %s\n" (Targeting.to_string targeting);
       Action.exec ~targets action >>| fun () ->
-      Printf.printf "exec rule action exec ok %s\n" (Targeting.to_string targeting);
       Option.iter sandbox_dir ~f:Path.rm_rf;
       (* All went well, these targets are no longer pending *)
       pending_targets := Pset.diff !pending_targets targets_to_remove;
@@ -732,7 +719,7 @@ and setup_copy_rules t ~all_non_target_source_files ctx_dir =
 let all_targets t =
   Pset.fold t.all_scheme_dirs ~init:(return ()) ~f:(fun dir fut ->
     fut >>= fun () ->
-    match load_dir t dir ~targeting:(Targeting.Dir dir) with
+    match load_dir t dir ~targeting:(Targeting.Dir dir) ~don't_load_dirs:Pset.empty with
     | Running fut -> fut
     | _ -> die "all_targets error\n")
   >>| fun () ->
@@ -867,8 +854,7 @@ let remove_old_artifacts t =
 let do_build_exn t targets =
   remove_old_artifacts t;
   all_unit (List.map targets ~f:(fun fn ->
-    Printf.printf "do_build %s\n" (Path.to_string fn);
-    wait_for_file t fn ~targeting:(Targeting.File fn)))
+    wait_for_file t fn ~targeting:(Targeting.File fn) ~don't_load_dirs:Pset.empty))
 
 let do_build t targets =
   try
@@ -882,7 +868,7 @@ let rules_for_files t paths =
   List.fold_left paths ~init:(return ()) ~f:(fun fut path ->
     fut >>= fun () ->
     let dir = Path.parent path in
-    match load_dir t dir ~targeting:(Targeting.File path) with
+    match load_dir t dir ~targeting:(Targeting.File path) ~don't_load_dirs:Pset.empty with
     | Running fut -> fut
     | _ -> die "rules_for_files error\n")
   >>| fun () ->
@@ -986,7 +972,7 @@ let build_rules t ?(recursive=false) targets =
   let rec loop fn =
     let dir = Path.parent fn in
     let load =
-      match load_dir t dir ~targeting:(Targeting.File fn) with
+      match load_dir t dir ~targeting:(Targeting.File fn) ~don't_load_dirs:Pset.empty with
       | Running fut -> fut
       | _ -> die "error build_rules\n"
     in
@@ -1016,7 +1002,7 @@ let build_rules t ?(recursive=false) targets =
           | Not_started { eval_rule; exec_rule } ->
             ir.exec <- Starting { for_file = (Targeting.File fn) };
             let rule_evaluation =
-              wrap_build_errors t ~targeting:(Targeting.File fn) ~f:eval_rule
+              wrap_build_errors t ~targeting:(Targeting.File fn) ~don't_load_dirs:Pset.empty ~f:eval_rule
             in
             ir.exec <-
               Evaluating_rule { for_file = (Targeting.File fn)
