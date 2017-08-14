@@ -1,0 +1,10 @@
+(executable
+ ((name gen)))
+
+(rule
+ ((targets (b.jbuild))
+  (deps (gen.exe))
+  (action (with-stdout-to b.jbuild
+           (run ${<})))))
+
+(include b.jbuild)

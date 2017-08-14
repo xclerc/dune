@@ -78,3 +78,10 @@
   (action
    (chdir test-cases/include-loop
     (setenv JBUILDER ${bin:jbuilder} (run ${exe:cram.exe} run.t))))))
+
+(alias
+ ((name runtest)
+  (deps ((files_recursively_in test-cases/include-gen)))
+  (action
+   (chdir test-cases/include-gen
+    (setenv JBUILDER ${bin:jbuilder} (run ${exe:cram.exe} run.t))))))
