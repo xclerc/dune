@@ -164,9 +164,18 @@ module Install_conf : sig
     ; dst : string option
     }
 
+  type glob_files =
+    { src     : Re.re
+    ; dst_dir : string
+    }
+
+  type location =
+    | File of file
+    | Glob_files of glob_files
+
   type t =
     { section : Install.Section.t
-    ; files   : file list
+    ; files   : location list
     ; package : Package.t
     }
 end

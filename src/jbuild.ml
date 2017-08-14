@@ -601,25 +601,41 @@ module Install_conf = struct
     ; dst : string option
     }
 
-  let file sexp =
+  type glob_files =
+    { src     : Re.re
+    ; dst_dir : string
+    }
+
+  type location =
+    | File of file
+    | Glob_files of glob_files
+
+  let location sexp =
     match sexp with
-    | Atom (_, src) -> { src; dst = None }
+    | Atom (_, src) -> File { src; dst = None }
     | List (_, [Atom (_, src); Atom (_, "as"); Atom (_, dst)]) ->
-      { src; dst = Some dst }
+      File { src; dst = Some dst }
+    | List (_, [List (_, [Atom (_, "glob_files"); Atom (_, src)]); Atom (_, "in"); Atom (_, dst_dir)]) ->
+      begin
+        match Glob_lexer.parse_string src with
+        | Ok re -> Glob_files { src = Re.compile re; dst_dir }
+        | Error (_, _) -> assert false
+      end
     | _ ->
       of_sexp_error sexp
-        "invalid format, <name> or (<name> as <install-as>) expected"
+        "invalid format, <name> or (<name> as <install-as>)
+or ((glob_files <glob>) in <dir>) expected"
 
   type t =
     { section : Install.Section.t
-    ; files   : file list
+    ; files   : location list
     ; package : Package.t
     }
 
   let v1 pkgs =
     record
       (field   "section" Install.Section.t >>= fun section ->
-       field   "files"   (list file)       >>= fun files ->
+       field   "files"   (list location)   >>= fun files ->
        Scope.package_field pkgs             >>= fun package ->
        return
          { section
@@ -662,7 +678,7 @@ module Executables = struct
         ~f:(fun name pub ->
           match pub with
           | None -> None
-          | Some pub -> Some ({ Install_conf. src = name ^ ext; dst = Some pub }))
+          | Some pub -> Some (Install_conf.File{ src = name ^ ext; dst = Some pub }))
       |> List.filter_map ~f:(fun x -> x)
     in
     match to_install with
