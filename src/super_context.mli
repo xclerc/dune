@@ -39,6 +39,8 @@ val artifacts : t -> Artifacts.t
 val stanzas_to_consider_for_install : t -> (Path.t * Stanza.t) list
 val cxx_flags : t -> string list
 
+val add_rule_ready : t -> unit
+
 val expand_vars : t -> scope:Scope.t -> dir:Path.t -> String_with_vars.t -> string
 
 val add_rule
@@ -55,7 +57,7 @@ val add_rules
   -> unit
 val rules : t -> Build_interpret.Rule.t list
 
-val add_include : t -> Path.t -> (unit, unit) Scheme.t -> unit
+val add_scheme : t -> Path.t -> (unit, unit) Scheme.t -> unit
 
 val schemes : t -> (unit, unit) Scheme.t Path.Map.t
 

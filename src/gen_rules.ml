@@ -1,6 +1,7 @@
 open Import
 open Jbuild
 open Build.O
+open Scheme.O
 open! No_io
 
 (* +-----------------------------------------------------------------+
@@ -116,35 +117,40 @@ module Gen(P : Params) = struct
            ; Dyn (fun (cm_files, _, _, _) -> Deps cm_files)
            ]))
 
-  let build_c_file (lib : Library.t) ~scope ~dir ~requires ~h_files c_name =
+  let build_c_file (lib : Library.t) ~scope ~dir ~requires c_name =
+    Scheme.arr (fun h_files ->
     let src = Path.relative dir (c_name ^ ".c") in
     let dst = Path.relative dir (c_name ^ ctx.ext_obj) in
-    SC.add_rule sctx
-      (Build.paths h_files
-       >>>
-       Build.fanout
-         (SC.expand_and_eval_set sctx ~scope ~dir lib.c_flags ~standard:(Context.cc_g ctx))
-         requires
-       >>>
-       Build.run ~context:ctx
-         (* We have to execute the rule in the library directory as the .o is produced in
-            the current directory *)
-         ~dir
-         (Dep ctx.ocamlc)
-         [ As (Utils.g ())
-         ; Dyn (fun (c_flags, libs) ->
-             S [ Lib.c_include_flags libs
-               ; Arg_spec.quote_args "-ccopt" c_flags
-               ])
-         ; A "-o"; Target dst
-         ; Dep src
-         ]);
-    dst
+    let rule =
+      Build_interpret.Rule.make ~context:(SC.context sctx)
+        (Build.paths h_files
+         >>>
+         Build.fanout
+           (SC.expand_and_eval_set sctx ~scope ~dir lib.c_flags ~standard:(Context.cc_g ctx))
+           requires
+         >>>
+         Build.run ~context:ctx
+           (* We have to execute the rule in the library directory as the .o is produced in
+              the current directory *)
+           ~dir
+           (Dep ctx.ocamlc)
+           [ As (Utils.g ())
+           ; Dyn (fun (c_flags, libs) ->
+               S [ Lib.c_include_flags libs
+                 ; Arg_spec.quote_args "-ccopt" c_flags
+                 ])
+           ; A "-o"; Target dst
+           ; Dep src
+           ])
+    in
+    (rule, dst))
 
-  let build_cxx_file (lib : Library.t) ~scope ~dir ~requires ~h_files c_name =
+  let build_cxx_file (lib : Library.t) ~scope ~dir ~requires c_name =
+    Scheme.arr (fun h_files ->
     let src = Path.relative dir (c_name ^ ".cpp") in
     let dst = Path.relative dir (c_name ^ ctx.ext_obj) in
-    SC.add_rule sctx
+    let rule =
+      Build_interpret.Rule.make ~context:(SC.context sctx)
       (Build.paths h_files
        >>>
        Build.fanout
@@ -166,8 +172,9 @@ module Gen(P : Params) = struct
                ])
          ; A "-o"; Target dst
          ; A "-c"; Dep src
-         ]);
-    dst
+         ])
+    in
+    (rule, dst))
 
   (* Hack for the install file *)
   let modules_by_lib : (string, Module.t list) Hashtbl.t = Hashtbl.create 32
@@ -178,7 +185,7 @@ module Gen(P : Params) = struct
   let alias_module_build_sandbox = Scanf.sscanf ctx.version "%u.%u"
      (fun a b -> a, b) <= (4, 02)
 
-  let library_rules (lib : Library.t) ~dir ~all_modules ~files ~scope =
+  let library_rules (lib : Library.t) ~dir ~all_modules ~scope =
     let dep_kind = if lib.optional then Build.Optional else Required in
     let flags = Ocaml_flags.make lib.buildable sctx ~scope ~dir in
     let modules =
@@ -294,62 +301,72 @@ module Gen(P : Params) = struct
         ~alias_module:None);
 
     if Library.has_stubs lib then begin
-      let h_files =
-        String_set.elements files
-        |> List.filter_map ~f:(fun fn ->
-          if String.is_suffix fn ~suffix:".h" then
-            Some (Path.relative dir fn)
-          else
-            None)
-      in
-      let o_files =
+      let scheme =
+        Scheme.list_files ~dir ~f:(String.is_suffix ~suffix:".h")
+        >>^*
+        List.map ~f:(Path.relative dir)
+        >>>*
         let requires =
           Build.memoize "header files"
             (requires >>> SC.Libs.file_deps sctx ~ext:".h")
         in
-        List.map lib.c_names   ~f:(build_c_file   lib ~scope ~dir ~requires ~h_files) @
-        List.map lib.cxx_names ~f:(build_cxx_file lib ~scope ~dir ~requires ~h_files)
-      in
-      match lib.self_build_stubs_archive with
-      | Some _ -> ()
-      | None ->
-        let ocamlmklib ~sandbox ~custom ~targets =
-          SC.add_rule sctx ~sandbox
-            (SC.expand_and_eval_set sctx ~scope ~dir lib.c_library_flags ~standard:[]
-             >>>
-             Build.run ~context:ctx
-               ~extra_targets:targets
-               (Dep ctx.ocamlmklib)
-               [ As (Utils.g ())
-               ; if custom then A "-custom" else As []
-               ; A "-o"
-               ; Path (Path.relative dir (sprintf "%s_stubs" lib.name))
-               ; Deps o_files
-               ; Dyn (fun cclibs ->
-                   (* https://github.com/janestreet/jbuilder/issues/119 *)
-                   if ctx.ccomp_type = "msvc" then
-                     let cclibs = msvc_hack_cclibs cclibs in
-                     Arg_spec.quote_args "-ldopt" cclibs
-                   else
-                     As cclibs
-                 )
-               ])
+        let requires =
+          Build.memoize "header files"
+            (requires >>> SC.Libs.file_deps sctx ~ext:".h")
         in
-        let static = stubs_archive lib ~dir in
-        let dynamic = dll lib ~dir in
-        if lib.modes.native &&
-           lib.modes.byte   &&
-           lib.dynlink
-        then begin
-          (* If we build for both modes and support dynlink, use a single invocation to
-             build both the static and dynamic libraries *)
-          ocamlmklib ~sandbox:false ~custom:false ~targets:[static; dynamic]
-        end else begin
-          ocamlmklib ~sandbox:false ~custom:true ~targets:[static];
-          (* We can't tell ocamlmklib to build only the dll, so we sandbox the action to
-             avoid overriding the static archive *)
-          ocamlmklib ~sandbox:true ~custom:false ~targets:[dynamic]
-        end
+        let rules_and_o_files =
+          List.map lib.c_names   ~f:(build_c_file   lib ~scope ~dir ~requires) @
+          List.map lib.cxx_names ~f:(build_cxx_file lib ~scope ~dir ~requires)
+        in
+        Scheme.all rules_and_o_files
+        >>^*
+        fun rules_and_o_files ->
+        let rules, o_files = List.split rules_and_o_files in
+        match lib.self_build_stubs_archive with
+        | Some _ -> rules
+        | None ->
+          let ocamlmklib ~sandbox ~custom ~targets =
+            Build_interpret.Rule.make ~sandbox ~context:(SC.context sctx)
+              (SC.expand_and_eval_set sctx ~scope ~dir lib.c_library_flags ~standard:[]
+               >>>
+               Build.run ~context:ctx
+                 ~extra_targets:targets
+                 (Dep ctx.ocamlmklib)
+                 [ As (Utils.g ())
+                 ; if custom then A "-custom" else As []
+                 ; A "-o"
+                 ; Path (Path.relative dir (sprintf "%s_stubs" lib.name))
+                 ; Deps o_files
+                 ; Dyn (fun cclibs ->
+                     (* https://github.com/janestreet/jbuilder/issues/119 *)
+                     if ctx.ccomp_type = "msvc" then
+                       let cclibs = msvc_hack_cclibs cclibs in
+                       Arg_spec.quote_args "-ldopt" cclibs
+                     else
+                       As cclibs
+                   )
+                 ])
+          in
+          let static = stubs_archive lib ~dir in
+          let dynamic = dll lib ~dir in
+          let new_rules =
+            if lib.modes.native &&
+               lib.modes.byte   &&
+               lib.dynlink
+            then begin
+              (* If we build for both modes and support dynlink, use a single invocation to
+                 build both the static and dynamic libraries *)
+              [ocamlmklib ~sandbox:false ~custom:false ~targets:[static; dynamic]]
+            end else begin
+              [ ocamlmklib ~sandbox:false ~custom:true ~targets:[static]
+              (* We can't tell ocamlmklib to build only the dll, so we sandbox the action to
+                 avoid overriding the static archive *)
+              ; ocamlmklib ~sandbox:true ~custom:false ~targets:[dynamic]]
+            end
+          in
+          new_rules @ rules
+      in
+      SC.add_scheme sctx dir (Scheme.dyn_rules scheme)
     end;
 
     List.iter Cm_kind.all ~f:(fun cm_kind ->
@@ -680,10 +697,9 @@ Add it to your jbuild file to remove this warning.
 
   let add_include incl sctx ~dir ~scope =
     let file = Path.relative dir incl.Include.file in
-    let open Scheme.O in
     let include_rules =
       Scheme.load_sexps file
-      >>^ (fun sexps ->
+      >>^* (fun sexps ->
         let stanzas = Stanzas.parse scope sexps in
         List.map stanzas ~f:(fun stanza ->
           match stanza with
@@ -693,7 +709,6 @@ Add it to your jbuild file to remove this warning.
               | Static fns -> Static (List.map fns ~f:(Path.relative dir))
             in
             let build =
-              let open Build.O in
               (SC.Deps.interpret sctx ~scope ~dir rule.deps
                >>>
                SC.Action.run
@@ -707,7 +722,7 @@ Add it to your jbuild file to remove this warning.
             Build_interpret.Rule.make build
           | _ -> die "Only rule stanzas are allowed in included files\n"))
     in
-    SC.add_include sctx dir (Scheme.dyn_rules include_rules)
+    SC.add_scheme sctx dir (Scheme.dyn_rules include_rules)
 
   let rules { SC.Dir_with_jbuild. src_dir; ctx_dir; stanzas; scope } =
     (* Interpret user rules and other simple stanzas first in order to populate the known
@@ -740,8 +755,7 @@ Add it to your jbuild file to remove this warning.
       let dir = ctx_dir in
       match (stanza : Stanza.t) with
       | Library lib ->
-        Some (library_rules lib ~dir ~all_modules:(Lazy.force all_modules)
-                ~files:(Lazy.force files) ~scope)
+        Some (library_rules lib ~dir ~all_modules:(Lazy.force all_modules) ~scope)
       | Executables exes ->
         Some (executables_rules exes ~dir ~all_modules:(Lazy.force all_modules) ~scope)
       | _ -> None)
@@ -956,7 +970,7 @@ Add it to your jbuild file to remove this warning.
       ; List.map dlls  ~f:(Install.Entry.make Stublibs)
       ]
 
-  let is_odig_doc_file fn =
+  let _is_odig_doc_file fn =
     List.exists [ "README"; "LICENSE"; "CHANGE"; "HISTORY"]
       ~f:(fun prefix -> String.is_prefix fn ~prefix)
 
@@ -970,14 +984,24 @@ Add it to your jbuild file to remove this warning.
       Install.Entry.set_src entry dst)
 
   let install_file package_path package entries _dyn_entries =
-    let entries =
-      let files = SC.sources_and_targets_known_so_far sctx ~src_path:Path.root in
-      String_set.fold files ~init:entries ~f:(fun fn acc ->
-        if is_odig_doc_file fn then
-          Install.Entry.make Doc (Path.relative ctx.build_dir fn) :: acc
-        else
-          acc)
+    let install_fn =
+      Path.relative (Path.append ctx.build_dir package_path) (package ^ ".install")
     in
+    (* let doc_scheme =
+     *   Scheme.list_files ~dir:Path.root ~f:is_odig_doc_file
+     *   >>^*
+     *   fun files ->
+     *   let entries = List.map files ~f:(fun fn ->
+     *     Install.Entry.make Doc (Path.relative ctx.build_dir fn))
+     *   in
+     *   Build_interpret.Rule.make ~context:(SC.context sctx)
+     *     (Build.path_set (Install.files entries)
+     *      >>^ (fun () ->
+     *        Install.gen_install_file entries)
+     *      >>>
+     *      Build.update_file_dyn install_fn)
+     * in
+     * SC.add_scheme sctx (Path.append ctx.build_dir package_path) (Scheme.dyn_rule doc_scheme); *)
     let entries =
       let opam = Path.relative package_path (package ^ ".opam") in
       Install.Entry.make Lib opam ~dst:"opam" :: entries
@@ -993,16 +1017,13 @@ Add it to your jbuild file to remove this warning.
       else
         entries
     in
-    let fn =
-      Path.relative (Path.append ctx.build_dir package_path) (package ^ ".install")
-    in
     let entries = local_install_rules entries ~package in
     SC.add_rule sctx
       (Build.path_set (Install.files entries)
        >>^ (fun () ->
          Install.gen_install_file entries)
        >>>
-       Build.write_file_dyn fn)
+       Build.write_file_dyn install_fn)
 
   let () =
     let static_entries_per_package =
@@ -1117,7 +1138,7 @@ let gen ~contexts ?(filter_out_optional_stanzas_with_missing_deps=true)
         let scheme =
           match Path.Map.find dir acc with
           | None -> scheme
-          | Some s -> Scheme.O.(>>>) s scheme
+          | Some s -> s >>>* scheme
         in
         Path.Map.add acc ~key:dir ~data:scheme))
   in
@@ -1131,7 +1152,7 @@ let gen ~contexts ?(filter_out_optional_stanzas_with_missing_deps=true)
       let scheme =
         match Path.Map.find target_dir acc with
         | None -> Scheme.rule rule
-        | Some s -> Scheme.O.(>>>) s (Scheme.rule rule)
+        | Some s -> s >>>* (Scheme.rule rule)
       in
       Path.Map.add acc ~key:target_dir ~data:scheme)
   in

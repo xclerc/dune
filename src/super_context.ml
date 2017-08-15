@@ -58,6 +58,7 @@ type t =
   ; external_dirs                           : (Path.t, External_dir.t) Hashtbl.t
   ; chdir                                   : (Action.t, Action.t) Build.t
   ; mutable schemes                         : (unit, unit) Scheme.t Path.Map.t
+  ; mutable don't_add_rule                  : bool
   }
 
 let context t = t.context
@@ -214,10 +215,17 @@ let create
       | Chdir _ -> action
       | _ -> Chdir (context.build_dir, action))
   ; schemes = Path.Map.empty
+  ; don't_add_rule = false
   }
 
+let add_rule_ready t =
+  t.don't_add_rule <- true
+
 let add_rule t ?sandbox ?fallback ?loc build =
-  let build = Build.O.(>>>) build t.chdir in
+  assert (not t.don't_add_rule);
+  let open Build.O in
+  let open Scheme.O in
+  let build = build >>> t.chdir in
   let rule = Build_interpret.Rule.make ?sandbox ?fallback ?loc ~context:t.context build in
   t.rules <- rule :: t.rules;
 
@@ -225,7 +233,7 @@ let add_rule t ?sandbox ?fallback ?loc build =
   let scheme =
     match Path.Map.find target_dir t.schemes with
     | None -> Scheme.rule rule
-    | Some s -> Scheme.O.(>>>) s (Scheme.rule rule)
+    | Some s -> s >>>* (Scheme.rule rule)
   in
   t.schemes <- Path.Map.add t.schemes ~key:target_dir ~data:scheme;
 
@@ -244,13 +252,14 @@ let add_rule t ?sandbox ?fallback ?loc build =
           in
           Path.Map.add acc ~key:dir ~data:files)
 
-let add_include t dir include_scheme =
+let add_scheme t dir scheme =
+  assert (not t.don't_add_rule);
   let open Scheme.O in
   t.schemes <-
     let scheme =
       match Path.Map.find dir t.schemes with
-      | None -> include_scheme
-      | Some s -> s >>> include_scheme
+      | None -> scheme
+      | Some s -> s >>>* scheme
     in
     Path.Map.add t.schemes ~key:dir ~data:scheme
 

@@ -363,15 +363,19 @@ let () =
 
 module Scheme_exec = struct
   open Scheme.Repr
-  let exec t x =
+  let exec t x all_targets_by_dir =
     let rec exec
       : type a b. (a, b) t -> a -> b = fun t x ->
       match t with
       | Arr f -> f x
       | Load_sexps p -> Sexp_lexer.Load.many (Path.to_string p)
       | Compose (a, b) -> exec a x |> exec b
+      | List_files (dir, f) ->
+        Pmap.find_default dir all_targets_by_dir ~default:Pset.empty
+        |> Pset.elements |>  List.map ~f:Path.basename |> List.filter ~f
       | Rules _ -> x
       | Dyn_rules _ -> x
+      | Fanout (a, b) -> (exec a x, exec b x)
     in
     exec t x
 end
@@ -382,27 +386,42 @@ let get_scheme_static_rules scheme =
     match t with
     | Rules rl -> List.append acc rl
     | Compose (a, b) -> loop a (loop b acc)
+    | Fanout (a, b) -> loop a (loop b acc)
     | _ -> acc
   in
   loop (Scheme.repr scheme) []
 
-let get_scheme_dyn_rules scheme =
+let get_scheme_dyn_rules scheme all_targets_by_dir =
   let open Scheme.Repr in
   let rec loop : type a b. (a, b) t -> Pre_rule.t list -> Pre_rule.t list = fun t acc ->
     match t with
-    | Dyn_rules rl -> List.append acc (Scheme_exec.exec rl ())
+    | Dyn_rules rl -> List.append acc (Scheme_exec.exec rl () all_targets_by_dir)
     | Compose (a, b) -> loop a (loop b acc)
+    | Fanout (a, b) -> loop a (loop b acc)
     | _ -> acc
   in
   loop (Scheme.repr scheme) []
 
-let get_scheme_deps scheme =
+let get_scheme_file_deps scheme =
   let open Scheme.Repr in
   let rec loop : type a b. (a, b) t -> Path.t list -> Path.t list = fun t acc ->
     match t with
     | Load_sexps p -> p :: acc
     | Dyn_rules t -> loop t acc
     | Compose (a, b) -> loop a (loop b acc)
+    | Fanout (a, b) -> loop a (loop b acc)
+    | _ -> acc
+  in
+  loop (Scheme.repr scheme) []
+
+let get_scheme_dir_deps scheme =
+  let open Scheme.Repr in
+  let rec loop : type a b. (a, b) t -> Path.t list -> Path.t list = fun t acc ->
+    match t with
+    | List_files (dir, _) -> dir :: acc
+    | Dyn_rules t -> loop t acc
+    | Compose (a, b) -> loop a (loop b acc)
+    | Fanout (a, b) -> loop a (loop b acc)
     | _ -> acc
   in
   loop (Scheme.repr scheme) []
@@ -454,11 +473,9 @@ let find_include_loop t file targeting =
   in
   loop targeting (Pset.singleton file) (Path.to_string file) for_dir
 
-let rec load_rule_dir_deps t rule ~targeting ~don't_load_dirs =
+let rec rule_dir_deps rule =
   let {Pre_rule.build; _} = rule in
-  let dir_deps = Build_interpret.dir_deps build in
-  List.iter dir_deps ~f:(fun dir ->
-    ignore (load_dir t dir ~targeting ~don't_load_dirs))
+  Build_interpret.dir_deps build
 
 and load_dir t dir ~targeting ~don't_load_dirs =
   match Pmap.find dir t.dirs_load with
@@ -488,14 +505,26 @@ and load_dir t dir ~targeting ~don't_load_dirs =
               ctx_dir
         in
         add_targets t copy_targets;
-        List.iter rules ~f:(load_rule_dir_deps t ~targeting:(Dir dir) ~don't_load_dirs);
+        let dir_deps =
+          List.concat_map rules ~f:rule_dir_deps
+          @ get_scheme_dir_deps scheme
+        in
+        Future.all_unit (List.map dir_deps ~f:(fun dd ->
+          let don't_load_dirs = Pset.add dir don't_load_dirs in
+          if Pset.mem dd don't_load_dirs then
+            return ()
+          else
+            match load_dir t dd ~targeting:(Dir dir) ~don't_load_dirs with
+            | Load_dir_status.Running { evaluation; _ } -> evaluation
+            | Starting _ -> die "load_dir error\n"))
+        >>= fun () ->
         List.iter rules ~f:(compile_rule t ~copy_source:false);
         setup_copy_rules t ~all_non_target_source_files:copy_sources ctx_dir;
 
-        let deps = get_scheme_deps scheme in
+        let deps = get_scheme_file_deps scheme in
         wait_for_deps t (Pset.of_list deps) ~targeting:(Targeting.Dir dir) ~don't_load_dirs:(Pset.add dir don't_load_dirs)
         >>| (fun () ->
-          let dyn_rules = get_scheme_dyn_rules scheme in
+          let dyn_rules = get_scheme_dyn_rules scheme t.all_targets_by_dir in
           let targets = rule_targets dyn_rules in
           add_targets t targets;
           List.iter dyn_rules ~f:(compile_rule t ~copy_source:false))
