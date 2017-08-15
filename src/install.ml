@@ -49,6 +49,16 @@ module Section = struct
       ]
 end
 
+
+module Dyn_entry = struct
+  type t =
+    { re      : Re.re
+    ; src_dir : Path.t
+    ; dst_dir : string option
+    ; section : Section.t
+    }
+end
+
 module Entry = struct
   type t =
     { src     : Path.t

@@ -1,4 +1,5 @@
 (** Opam install file *)
+open Import
 
 module Section : sig
   type t =
@@ -16,6 +17,15 @@ module Section : sig
     | Misc
 
   val t : t Sexp.Of_sexp.t
+end
+
+module Dyn_entry : sig
+  type t =
+    { re      : Re.re
+    ; src_dir : Path.t
+    ; dst_dir : string option
+    ; section : Section.t
+    }
 end
 
 module Entry : sig

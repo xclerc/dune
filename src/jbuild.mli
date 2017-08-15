@@ -165,8 +165,9 @@ module Install_conf : sig
     }
 
   type glob_files =
-    { src     : Re.re
-    ; dst_dir : string
+    { re      : Re.re
+    ; src_dir : string
+    ; dst_dir : string option
     }
 
   type location =

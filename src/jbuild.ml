@@ -602,25 +602,31 @@ module Install_conf = struct
     }
 
   type glob_files =
-    { src     : Re.re
-    ; dst_dir : string
+    { re      : Re.re
+    ; src_dir : string
+    ; dst_dir : string option
     }
 
   type location =
     | File of file
     | Glob_files of glob_files
 
+  let make_glob src dst_dir =
+    let path = Path.of_string src in
+    let dir, re = Path.parent path, Path.basename path in
+    match Glob_lexer.parse_string re with
+    | Ok re -> Glob_files { re = Re.compile re; src_dir = (Path.to_string dir); dst_dir}
+    | Error (_, _) -> assert false
+
   let location sexp =
     match sexp with
     | Atom (_, src) -> File { src; dst = None }
     | List (_, [Atom (_, src); Atom (_, "as"); Atom (_, dst)]) ->
       File { src; dst = Some dst }
-    | List (_, [List (_, [Atom (_, "glob_files"); Atom (_, src)]); Atom (_, "in"); Atom (_, dst_dir)]) ->
-      begin
-        match Glob_lexer.parse_string src with
-        | Ok re -> Glob_files { src = Re.compile re; dst_dir }
-        | Error (_, _) -> assert false
-      end
+    | List (_, [List (_, [Atom (_, "glob_files"); Atom (_, src)])]) -> make_glob src None
+    | List (_, [List (_, [Atom (_, "glob_files"); Atom (_, src)])
+               ; Atom (_, "in")
+               ; Atom (_, dst)]) -> make_glob src (Some dst)
     | _ ->
       of_sexp_error sexp
         "invalid format, <name> or (<name> as <install-as>)

@@ -969,7 +969,7 @@ Add it to your jbuild file to remove this warning.
       SC.add_rule sctx (Build.symlink ~src:entry.src ~dst);
       Install.Entry.set_src entry dst)
 
-  let install_file package_path package entries =
+  let install_file package_path package entries _dyn_entries =
     let entries =
       let files = SC.sources_and_targets_known_so_far sctx ~src_path:Path.root in
       String_set.fold files ~init:entries ~f:(fun fn acc ->
@@ -1005,7 +1005,7 @@ Add it to your jbuild file to remove this warning.
        Build.write_file_dyn fn)
 
   let () =
-    let entries_per_package =
+    let static_entries_per_package =
       List.concat_map (SC.stanzas_to_consider_for_install sctx)
         ~f:(fun (dir, stanza) ->
           match stanza with
@@ -1013,14 +1013,35 @@ Add it to your jbuild file to remove this warning.
             List.map (lib_install_files ~dir ~sub_dir lib) ~f:(fun x ->
               package.name, x)
           | Install { section; files; package}->
-            List.map files ~f:(fun { Install_conf. src; dst } ->
-              (package.name, Install.Entry.make section (Path.relative dir src) ?dst))
+            List.filter_map files ~f:(fun location ->
+              match location with
+              | File { src; dst } ->
+                Some (package.name, Install.Entry.make section (Path.relative dir src) ?dst)
+              | Glob_files _ -> None)
+          | _ -> [])
+      |> String_map.of_alist_multi
+    in
+    let dyn_entries_per_package =
+      List.concat_map (SC.stanzas_to_consider_for_install sctx)
+        ~f:(fun (dir, stanza) ->
+          match stanza with
+          | Install { section; files; package}->
+            List.filter_map files ~f:(fun location ->
+              match location with
+              | Glob_files { re; src_dir; dst_dir } ->
+                Some (package.name, Install.Dyn_entry.{re; src_dir = (Path.relative dir src_dir); dst_dir; section})
+              | File _ -> None)
           | _ -> [])
       |> String_map.of_alist_multi
     in
     String_map.iter (SC.packages sctx) ~f:(fun ~key:_ ~data:(pkg : Package.t) ->
-      let stanzas = String_map.find_default pkg.name entries_per_package ~default:[] in
-      install_file pkg.path pkg.name stanzas)
+      let static_entries =
+        String_map.find_default pkg.name static_entries_per_package ~default:[]
+      in
+      let dyn_entries =
+        String_map.find_default pkg.name dyn_entries_per_package ~default:[]
+      in
+      install_file pkg.path pkg.name static_entries dyn_entries)
 
   let () =
     let is_default = Path.basename ctx.build_dir = "default" in

@@ -17,34 +17,37 @@ let create (context : Context.t) l ~f =
             match (stanza : Stanza.t) with
             | Install { section = Bin; files; _ } ->
               (List.fold_left files ~init:local_bins
-                 ~f:(fun acc { Install_conf. src; dst } ->
-                   let name =
-                     match dst with
-                     | Some s -> s
-                     | None -> Filename.basename src
-                   in
-                   let key =
-                     if Sys.win32 && Filename.extension name = ".exe" then
-                       String.sub name ~pos:0 ~len:(String.length name - 4)
-                     else
-                       name
-                   in
-                   let in_bin_dir =
-                     let fn =
-                       if Sys.win32 then
-                         match Filename.extension src with
-                         | ".exe" | ".bc" ->
-                           if Filename.extension name <> ".exe" then
-                             name ^ ".exe"
-                           else
-                             name
-                         | _ -> name
+                 ~f:(fun acc conf ->
+                   match conf with
+                   | Install_conf.Glob_files _ -> assert false
+                   | File { src; dst } ->
+                     let name =
+                       match dst with
+                       | Some s -> s
+                       | None -> Filename.basename src
+                     in
+                     let key =
+                       if Sys.win32 && Filename.extension name = ".exe" then
+                         String.sub name ~pos:0 ~len:(String.length name - 4)
                        else
                          name
                      in
-                     Path.relative bin_dir fn
-                   in
-                   String_map.add acc ~key ~data:in_bin_dir),
+                     let in_bin_dir =
+                       let fn =
+                         if Sys.win32 then
+                           match Filename.extension src with
+                           | ".exe" | ".bc" ->
+                             if Filename.extension name <> ".exe" then
+                               name ^ ".exe"
+                             else
+                               name
+                           | _ -> name
+                         else
+                           name
+                       in
+                       Path.relative bin_dir fn
+                     in
+                     String_map.add acc ~key ~data:in_bin_dir),
                local_libs)
             | Library { public = Some pub; _ } ->
               (local_bins,
