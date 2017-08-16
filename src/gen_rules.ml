@@ -782,9 +782,9 @@ Add it to your jbuild file to remove this warning.
 
   (* META files that must be installed. Either because there is an explicit or user
      generated one, or because *)
-  let packages_with_explicit_or_user_generated_meta =
+  let () =
     String_map.values (SC.packages sctx)
-    |> List.filter_map ~f:(fun (pkg : Package.t) ->
+    |> List.iter ~f:(fun (pkg : Package.t) ->
       let path = Path.append ctx.build_dir pkg.path in
       let meta_fn = "META." ^ pkg.name in
       let meta_templ_fn = meta_fn ^ ".template" in
@@ -884,13 +884,7 @@ Add it to your jbuild file to remove this warning.
            Format.pp_print_flush ppf ();
            Buffer.contents buf)
          >>>
-         Build.write_file_dyn meta_path);
-
-      if has_meta || has_meta_tmpl then
-        Some pkg.name
-      else
-        None)
-    |> String_set.of_list
+         Build.write_file_dyn meta_path))
 
   (* +-----------------------------------------------------------------+
      | Installation                                                    |
@@ -970,7 +964,7 @@ Add it to your jbuild file to remove this warning.
       ; List.map dlls  ~f:(Install.Entry.make Stublibs)
       ]
 
-  let _is_odig_doc_file fn =
+  let is_odig_doc_file fn =
     List.exists [ "README"; "LICENSE"; "CHANGE"; "HISTORY"]
       ~f:(fun prefix -> String.is_prefix fn ~prefix)
 
@@ -980,50 +974,70 @@ Add it to your jbuild file to remove this warning.
       let dst =
         Path.append install_dir (Install.Entry.relative_installed_path entry ~package)
       in
-      SC.add_rule sctx (Build.symlink ~src:entry.src ~dst);
+      Build_interpret.Rule.make ~context:(SC.context sctx)
+        (Build.symlink ~src:entry.src ~dst);)
+
+  let local_install_entries (entries : Install.Entry.t list) ~package =
+    let install_dir = Config.local_install_dir ~context:ctx.name in
+    List.map entries ~f:(fun entry ->
+      let dst =
+        Path.append install_dir (Install.Entry.relative_installed_path entry ~package)
+      in
       Install.Entry.set_src entry dst)
 
-  let install_file package_path package entries _dyn_entries =
+  let install_file package_path package entries dyn_entries =
     let install_fn =
       Path.relative (Path.append ctx.build_dir package_path) (package ^ ".install")
     in
-    (* let doc_scheme =
-     *   Scheme.list_files ~dir:Path.root ~f:is_odig_doc_file
-     *   >>^*
-     *   fun files ->
-     *   let entries = List.map files ~f:(fun fn ->
-     *     Install.Entry.make Doc (Path.relative ctx.build_dir fn))
-     *   in
-     *   Build_interpret.Rule.make ~context:(SC.context sctx)
-     *     (Build.path_set (Install.files entries)
-     *      >>^ (fun () ->
-     *        Install.gen_install_file entries)
-     *      >>>
-     *      Build.update_file_dyn install_fn)
-     * in
-     * SC.add_scheme sctx (Path.append ctx.build_dir package_path) (Scheme.dyn_rule doc_scheme); *)
     let entries =
       let opam = Path.relative package_path (package ^ ".opam") in
       Install.Entry.make Lib opam ~dst:"opam" :: entries
     in
     let entries =
-      (* Install a META file if the user wrote one or setup a rule to generate one, or if
-         we have at least another file to install in the lib/ directory *)
       let meta_fn = "META." ^ package in
-      if String_set.mem package packages_with_explicit_or_user_generated_meta ||
-         List.exists entries ~f:(fun (e : Install.Entry.t) -> e.section = Lib) then
-        let meta = Path.append ctx.build_dir (Path.relative package_path meta_fn) in
-        Install.Entry.make Lib meta ~dst:"META" :: entries
-      else
-        entries
+      let meta = Path.append ctx.build_dir (Path.relative package_path meta_fn) in
+      Install.Entry.make Lib meta ~dst:"META" :: entries
     in
-    let entries = local_install_rules entries ~package in
-    SC.add_rule sctx
-      (Build.path_set (Install.files entries)
-       >>^ (fun () ->
-         Install.gen_install_file entries)
-       >>>
-       Build.write_file_dyn install_fn)
+    List.iter (local_install_rules entries ~package) ~f:(fun rule ->
+      SC.add_rule sctx rule.Build_interpret.Rule.build);
+    let scheme =
+      let doc_scheme =
+        Scheme.list_files ~dir:Path.root ~f:is_odig_doc_file
+        >>^*
+        fun files ->
+        List.map files ~f:(fun fn ->
+          Install.Entry.make Doc (Path.relative ctx.build_dir fn))
+      in
+      let entry_schemes =
+        doc_scheme ::
+        List.map dyn_entries ~f:(fun de ->
+          Scheme.list_files ~dir:de.Install.Dyn_entry.src_dir ~f:(Re.execp de.re)
+          >>^*
+          fun files ->
+          List.map files ~f:(fun fn ->
+            let dst = match de.dst_dir with
+              | None -> None
+              | Some dir -> Some (Path.to_string (Path.relative (Path.of_string dir) fn))
+            in
+            Install.Entry.make de.section ?dst (Path.relative de.src_dir fn)))
+      in
+      Scheme.all entry_schemes
+      >>^*
+      (fun entries ->
+      let entries = List.concat entries in
+      (local_install_rules entries ~package, entries))
+      >>^*
+      fun (rules, doc_entries) ->
+      let entries = local_install_entries (entries @ doc_entries) ~package in
+      Build_interpret.Rule.make ~context:(SC.context sctx)
+        (Build.path_set (Install.files entries)
+         >>^ (fun () ->
+           Install.gen_install_file entries)
+         >>>
+         Build.write_file_dyn install_fn)
+      :: rules
+    in
+    SC.add_scheme sctx (Path.append ctx.build_dir package_path) (Scheme.dyn_rules scheme)
 
   let () =
     let static_entries_per_package =
@@ -1128,6 +1142,7 @@ let gen ~contexts ?(filter_out_optional_stanzas_with_missing_deps=true)
         ~stanzas
     in
     let module M = Gen(struct let sctx = sctx end) in
+    Super_context.add_rule_ready sctx;
     (Super_context.schemes sctx, (context.name, stanzas)))
   |> Future.all
   >>| fun l ->

@@ -522,7 +522,8 @@ and load_dir t dir ~targeting ~don't_load_dirs =
         setup_copy_rules t ~all_non_target_source_files:copy_sources ctx_dir;
 
         let deps = get_scheme_file_deps scheme in
-        wait_for_deps t (Pset.of_list deps) ~targeting:(Targeting.Dir dir) ~don't_load_dirs:(Pset.add dir don't_load_dirs)
+        wait_for_deps t (Pset.of_list deps) ~targeting:(Targeting.Dir dir)
+          ~don't_load_dirs:(Pset.add dir don't_load_dirs)
         >>| (fun () ->
           let dyn_rules = get_scheme_dyn_rules scheme t.all_targets_by_dir in
           let targets = rule_targets dyn_rules in
