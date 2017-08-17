@@ -56,6 +56,9 @@ module Cached_digest : sig
       digest for [src], then set it for [dst]. *)
   val record_file_copy : src:Path.t -> dst:Path.t -> unit
 
+  (** [record_write_file path s] records that [s] was written to [path] *)
+  val record_write_file : Path.t -> string -> unit
+
   (** Dump/load the cache to/from the disk *)
   val dump : unit -> unit
   val load : unit -> unit

@@ -188,6 +188,13 @@ module Cached_digest = struct
     | _ ->
       ()
 
+  let record_write_file fn s =
+    Hashtbl.replace cache ~key:fn
+      ~data:{ digest = Digest.string s
+            ; timestamp = timestamp fn
+            ; timestamp_checked = true
+            }
+
   let db_file = "_build/.digest-db"
 
   let dump () =
