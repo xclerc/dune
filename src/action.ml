@@ -515,6 +515,11 @@ let exec_echo stdout_to str =
      | None -> print_string str; flush stdout
      | Some (_, oc) -> output_string oc str)
 
+let exec_write_file fn s =
+  Io.write_file (Path.to_string fn) s;
+  Utils.Cached_digest.record_write_file fn s;
+  return ()
+
 let rec exec t ~ectx ~dir ~env_extra ~stdout_to ~stderr_to =
   match t with
   | Run (prog, args) ->
@@ -524,6 +529,8 @@ let rec exec t ~ectx ~dir ~env_extra ~stdout_to ~stderr_to =
   | Setenv (var, value, t) ->
     exec t ~ectx ~dir ~stdout_to ~stderr_to
       ~env_extra:(Env_var_map.add env_extra ~key:var ~data:value)
+  | Redirect (Stdout, fn, Echo s) ->
+    exec_write_file fn s
   | Redirect (outputs, fn, t) ->
     redirect ~ectx ~dir outputs fn t ~env_extra ~stdout_to ~stderr_to
   | Ignore (outputs, t) ->
@@ -583,9 +590,7 @@ let rec exec t ~ectx ~dir ~env_extra ~stdout_to ~stderr_to =
       (Utils.bash_exn ~needed_to:"interpret (bash ...) actions")
       ["-e"; "-u"; "-o"; "pipefail"; "-c"; cmd]
   | Write_file (fn, s) ->
-    Io.write_file (Path.to_string fn) s;
-    Utils.Cached_digest.record_write_file fn s;
-    return ()
+    exec_write_file fn s
   | Rename (src, dst) ->
     Unix.rename (Path.to_string src) (Path.to_string dst);
     return ()
