@@ -353,14 +353,12 @@ let create_file_specs t targets rule ~copy_source =
 
 module Pre_rule = Build_interpret.Rule
 
-let clear_targets_digests_after_rule_execution targets =
+let check_targets_after_rule_execution targets =
   let missing =
     List.fold_left targets ~init:Pset.empty ~f:(fun acc fn ->
       match Unix.lstat (Path.to_string fn) with
       | exception _ -> Pset.add fn acc
-      | (_ : Unix.stats) ->
-        Utils.Cached_digest.remove fn;
-        acc)
+      | (_ : Unix.stats) -> acc)
   in
   if not (Pset.is_empty missing) then
     die "@{<error>Error@}: Rule failed to generate the following targets:\n%s"
@@ -473,13 +471,13 @@ let compile_rule t ~all_targets_by_dir ?(copy_source=false) pre_rule =
         | (_ : Unix.stats) -> false)
     in
     if deps_or_rule_changed || targets_missing then (
-      (* Do not remove files that are just updated, otherwise this would break incremental
-         compilation *)
-      let targets_to_remove =
-        Pset.diff targets (Action.updated_files action)
-      in
-      Pset.iter targets_to_remove ~f:Path.unlink_no_err;
-      pending_targets := Pset.union targets_to_remove !pending_targets;
+      List.iter targets_as_list ~f:(fun target ->
+        Path.unlink_no_err target;
+        (* It is important to remove the target from the cache before running the action
+           as some specific actions update the cache. *)
+        Utils.Cached_digest.remove target
+      );
+      pending_targets := Pset.union targets !pending_targets;
       let action =
         match sandbox_dir with
         | Some sandbox_dir ->
@@ -503,8 +501,8 @@ let compile_rule t ~all_targets_by_dir ?(copy_source=false) pre_rule =
       Action.exec ~targets action >>| fun () ->
       Option.iter sandbox_dir ~f:Path.rm_rf;
       (* All went well, these targets are no longer pending *)
-      pending_targets := Pset.diff !pending_targets targets_to_remove;
-      clear_targets_digests_after_rule_execution targets_as_list
+      pending_targets := Pset.diff !pending_targets targets;
+      check_targets_after_rule_execution targets_as_list
     ) else
       return ()
   in
