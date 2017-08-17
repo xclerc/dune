@@ -173,10 +173,10 @@ module Repr : sig
 
   and glob_state =
     | G_unevaluated of Path.t * Re.re
-    | G_evaluated   of Path.t list
+    | G_evaluated   of (Path.t * Re.re) * Path.Set.t
 
   val get_if_file_exists_exn : ('a, 'b) if_file_exists_state ref -> ('a, 'b) t
-  val get_glob_result_exn : glob_state ref -> Path.t list
+  val get_glob_result_exn : glob_state ref -> Path.Set.t
 end
 
 val repr : ('a, 'b) t -> ('a, 'b) Repr.t

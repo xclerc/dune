@@ -255,7 +255,7 @@ module Build_exec = struct
         let b = exec dyn_deps b x in
         (a, b)
       | Paths _ -> x
-      | Paths_glob state -> get_glob_result_exn state
+      | Paths_glob state -> Pset.elements (get_glob_result_exn state)
       | Contents p -> Io.read_file (Path.to_string p)
       | Lines_of p -> Io.lines_of_file (Path.to_string p)
       | Vpath (Vspec.T (fn, kind)) ->
@@ -473,11 +473,15 @@ let find_include_loop t file targeting =
   in
   loop targeting (Pset.singleton file) (Path.to_string file) for_dir
 
-let rec rule_dir_deps rule =
-  let {Pre_rule.build; _} = rule in
+let check_dir_deps t rule =
+  let { Pre_rule.build; _ } = rule in
+  Build_interpret.check_dir_deps build ~all_targets_by_dir:t.all_targets_by_dir
+
+let rule_dir_deps rule =
+  let { Pre_rule.build; _ } = rule in
   Build_interpret.dir_deps build
 
-and load_dir t dir ~targeting ~don't_load_dirs =
+let rec load_dir t dir ~targeting ~don't_load_dirs =
   match Pmap.find dir t.dirs_load with
   | None ->
     begin
@@ -510,9 +514,8 @@ and load_dir t dir ~targeting ~don't_load_dirs =
           @ get_scheme_dir_deps scheme
         in
         Future.all_unit (List.map dir_deps ~f:(fun dd ->
-          let don't_load_dirs = Pset.add dir don't_load_dirs in
-          if Pset.mem dd don't_load_dirs then
-            return ()
+          if Path.compare dd dir = 0 then return ()
+          else if Pset.mem dd don't_load_dirs then die "load_dir error\n"
           else
             match load_dir t dd ~targeting:(Dir dir) ~don't_load_dirs with
             | Load_dir_status.Running { evaluation; _ } -> evaluation
@@ -520,7 +523,6 @@ and load_dir t dir ~targeting ~don't_load_dirs =
         >>= fun () ->
         List.iter rules ~f:(compile_rule t ~copy_source:false);
         setup_copy_rules t ~all_non_target_source_files:copy_sources ctx_dir;
-
         let deps = get_scheme_file_deps scheme in
         wait_for_deps t (Pset.of_list deps) ~targeting:(Targeting.Dir dir)
           ~don't_load_dirs:(Pset.add dir don't_load_dirs)
@@ -528,7 +530,9 @@ and load_dir t dir ~targeting ~don't_load_dirs =
           let dyn_rules = get_scheme_dyn_rules scheme t.all_targets_by_dir in
           let targets = rule_targets dyn_rules in
           add_targets t targets;
-          List.iter dyn_rules ~f:(compile_rule t ~copy_source:false))
+          List.iter dyn_rules ~f:(compile_rule t ~copy_source:false);
+          List.iter rules ~f:(check_dir_deps t)
+        )
       in
       let status = Load_dir_status.Running { for_file = targeting; evaluation = load } in
       t.dirs_load <- Pmap.add t.dirs_load ~key:dir ~data:status;

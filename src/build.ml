@@ -61,7 +61,7 @@ module Repr = struct
 
   and glob_state =
     | G_unevaluated of Path.t * Re.re
-    | G_evaluated   of Path.t list
+    | G_evaluated   of (Path.t * Re.re) * Path.Set.t
 
   let get_if_file_exists_exn state =
     match !state with
@@ -70,7 +70,7 @@ module Repr = struct
 
   let get_glob_result_exn state =
     match !state with
-    | G_evaluated l -> l
+    | G_evaluated (_, ps) -> ps
     | G_unevaluated (_, _) ->
       code_errorf "Build.get_glob_result_exn: got unevaluated"
 end

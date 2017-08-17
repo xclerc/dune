@@ -53,3 +53,8 @@ val dir_deps
 val targets
   :  (_, _) Build.t
   -> Target.t list
+
+val check_dir_deps
+  : (_, _) Build.t
+  -> all_targets_by_dir:Path.Set.t Path.Map.t
+  -> unit

@@ -26,6 +26,21 @@ module Static_deps = struct
     }
 end
 
+let eval_glob dir re ~all_targets_by_dir =
+  match Pmap.find dir all_targets_by_dir with
+  | None -> Pset.empty
+  | Some targets ->
+    Pset.filter targets ~f:(fun path ->
+      Re.execp re (Path.basename path))
+
+let eval_file_exists p ~all_targets_by_dir =
+  let dir = Path.parent p in
+  let targets =
+    Option.value (Pmap.find dir all_targets_by_dir)
+      ~default:Pset.empty
+  in
+  Pset.mem p targets
+
 let static_deps t ~all_targets_by_dir =
   let rec loop : type a b. (a, b) t -> Static_deps.t -> Static_deps.t = fun t acc ->
     match t with
@@ -40,30 +55,20 @@ let static_deps t ~all_targets_by_dir =
     | Paths fns -> { acc with action_deps = Pset.union fns acc.action_deps }
     | Paths_glob state -> begin
         match !state with
-        | G_evaluated l ->
-          { acc with action_deps = Pset.union acc.action_deps (Pset.of_list l) }
+        | G_evaluated (_, ps) ->
+          { acc with action_deps = Pset.union acc.action_deps ps }
         | G_unevaluated (dir, re) ->
-          match Pmap.find dir all_targets_by_dir with
-          | None -> acc
-          | Some targets ->
-            let result =
-              Pset.filter targets ~f:(fun path ->
-                Re.execp re (Path.basename path))
-            in
-            state := G_evaluated (Pset.elements result);
-            let action_deps = Pset.union result acc.action_deps in
+          let result = eval_glob dir re ~all_targets_by_dir in
+          state := G_evaluated ((dir, re), result);
+          let action_deps = Pset.union result acc.action_deps in
             { acc with action_deps }
       end
     | If_file_exists (p, state) -> begin
         match !state with
         | Decided (_, t) -> loop t acc
         | Undecided (then_, else_) ->
-          let dir = Path.parent p in
-          let targets =
-            Option.value (Pmap.find dir all_targets_by_dir)
-              ~default:Pset.empty
-          in
-          if Pset.mem p targets then begin
+          let exists = eval_file_exists p ~all_targets_by_dir in
+          if exists then begin
             state := Decided (true, then_);
             loop then_ acc
           end else begin
@@ -174,6 +179,43 @@ let targets =
     | Memo m -> loop m.t acc
   in
   fun t -> loop (Build.repr t) []
+
+let check_dir_deps t ~all_targets_by_dir =
+  let rec loop : type a b. (a, b) t -> unit = fun t ->
+    match t with
+    | Arr _ -> ()
+    | Targets _ -> ()
+    | Store_vfile _ -> ()
+    | Compose (a, b) -> loop a; loop b
+    | First t -> loop t
+    | Second t -> loop t
+    | Split (a, b) -> loop a; loop b
+    | Fanout (a, b) -> loop a; loop b
+    | Paths _ -> ()
+    | Paths_glob state -> begin
+        match !state with
+        | G_evaluated ((dir, re), ps) ->
+          let new_res = eval_glob dir re ~all_targets_by_dir in
+          if Pset.compare new_res ps <> 0 then die "glob evaluation changed unexpectedly"
+        | G_unevaluated _ -> die "unevaluated globs in check_dir_deps"
+      end
+    | If_file_exists (p, state) -> begin
+        match !state with
+        | Decided (s, t) ->
+          let exists = eval_file_exists p ~all_targets_by_dir in
+          if exists = s then loop t
+          else die "file_exists evaluation changed unexpectedly"
+        | Undecided _ -> die "unevaluated if_file_exists in check_dir_deps"
+      end
+    | Dyn_paths t -> loop t
+    | Vpath (Vspec.T _) -> ()
+    | Contents _ -> ()
+    | Lines_of _ -> ()
+    | Record_lib_deps _ -> ()
+    | Fail _ -> ()
+    | Memo m -> loop m.t
+  in
+  loop (Build.repr t)
 
 module Rule = struct
   type t =
