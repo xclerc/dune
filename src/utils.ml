@@ -145,13 +145,16 @@ module Cached_digest = struct
 
   let cache = Hashtbl.create 1024
 
+  let timestamp fn =
+    (Unix.stat (Path.to_string fn)).st_mtime
+
   let file fn =
     match Hashtbl.find cache fn with
     | Some x ->
       if x.timestamp_checked then
         x.digest
       else begin
-        let mtime = (Unix.stat (Path.to_string fn)).st_mtime in
+        let mtime = timestamp fn in
         if mtime <> x.timestamp then begin
           let digest = Digest.file (Path.to_string fn) in
           x.digest    <- digest;
@@ -164,7 +167,7 @@ module Cached_digest = struct
       let digest = Digest.file (Path.to_string fn) in
       Hashtbl.add cache ~key:fn
         ~data:{ digest
-              ; timestamp = (Unix.stat (Path.to_string fn)).st_mtime
+              ; timestamp = timestamp fn
               ; timestamp_checked = true
               };
       digest
@@ -173,6 +176,17 @@ module Cached_digest = struct
     match Hashtbl.find cache fn with
     | None -> ()
     | Some file -> file.timestamp_checked <- false
+
+  let record_file_copy ~src ~dst =
+    match Hashtbl.find cache src with
+    | Some x when x.timestamp_checked ->
+      Hashtbl.replace cache ~key:dst
+        ~data:{ x with
+                timestamp = timestamp dst
+              ; timestamp_checked = true
+              }
+    | _ ->
+      ()
 
   let db_file = "_build/.digest-db"
 

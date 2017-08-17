@@ -52,6 +52,10 @@ module Cached_digest : sig
   (** Clear the following digest from the cache *)
   val remove : Path.t -> unit
 
+  (** Record the fact that [src] was copied to [dst]. If we already have an up-to-date
+      digest for [src], then set it for [dst]. *)
+  val record_file_copy : src:Path.t -> dst:Path.t -> unit
+
   (** Dump/load the cache to/from the disk *)
   val dump : unit -> unit
   val load : unit -> unit

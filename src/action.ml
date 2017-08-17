@@ -541,6 +541,7 @@ let rec exec t ~ectx ~dir ~env_extra ~stdout_to ~stderr_to =
     return ()
   | Copy (src, dst) ->
     Io.copy_file ~src:(Path.to_string src) ~dst:(Path.to_string dst);
+    Utils.Cached_digest.record_file_copy ~src ~dst;
     return ()
   | Symlink (src, dst) ->
     if Sys.win32 then
@@ -562,6 +563,7 @@ let rec exec t ~ectx ~dir ~env_extra ~stdout_to ~stderr_to =
       | exception _ ->
         Unix.symlink src dst
     end;
+    Utils.Cached_digest.record_file_copy ~src ~dst;
     return ()
   | Copy_and_add_line_directive (src, dst) ->
     Io.with_file_in (Path.to_string src) ~f:(fun ic ->
