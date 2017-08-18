@@ -1,0 +1,5 @@
+(rule
+ ((targets (i.jbuild))
+  (action (system "echo '(rule (copy a.x a.y))' > i.jbuild"))))
+
+(include i.jbuild)

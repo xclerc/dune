@@ -514,25 +514,30 @@ let rec load_dir t dir ~targeting ~don't_load_dirs =
           @ get_scheme_dir_deps scheme
         in
         Future.all_unit (List.map dir_deps ~f:(fun dd ->
+          (* the directories this directory depends on have to be loaded completely
+             before this directory. *)
           if Path.compare dd dir = 0 then return ()
-          else if Pset.mem dd don't_load_dirs then die "load_dir error\n"
+          else if Pset.mem dd don't_load_dirs then die "dir dependency cycle"
           else
-            match load_dir t dd ~targeting:(Dir dir) ~don't_load_dirs with
+            match
+              load_dir t dd ~targeting:(Dir dir)
+                ~don't_load_dirs:(Pset.add dir don't_load_dirs)
+            with
             | Load_dir_status.Running { evaluation; _ } -> evaluation
-            | Starting _ -> die "load_dir error\n"))
+            | Starting _ -> die "dir dependency cycle"))
         >>= fun () ->
         List.iter rules ~f:(compile_rule t ~copy_source:false);
         setup_copy_rules t ~all_non_target_source_files:copy_sources ctx_dir;
         let deps = get_scheme_file_deps scheme in
         wait_for_deps t (Pset.of_list deps) ~targeting:(Targeting.Dir dir)
           ~don't_load_dirs:(Pset.add dir don't_load_dirs)
-        >>| (fun () ->
-          let dyn_rules = get_scheme_dyn_rules scheme t.all_targets_by_dir in
-          let targets = rule_targets dyn_rules in
-          add_targets t targets;
-          List.iter dyn_rules ~f:(compile_rule t ~copy_source:false);
-          List.iter rules ~f:(check_dir_deps t)
-        )
+        >>| fun () ->
+        let dyn_rules = get_scheme_dyn_rules scheme t.all_targets_by_dir in
+        let targets = rule_targets dyn_rules in
+        add_targets t targets;
+        List.iter dyn_rules ~f:(compile_rule t ~copy_source:false);
+        (* check that loading the directory completely did not change globs *)
+        List.iter rules ~f:(check_dir_deps t)
       in
       let status = Load_dir_status.Running { for_file = targeting; evaluation = load } in
       t.dirs_load <- Pmap.add t.dirs_load ~key:dir ~data:status;
@@ -545,10 +550,10 @@ and is_target t file =
   let load =
     match load_dir t dir ~targeting:(Targeting.File file) ~don't_load_dirs:Pset.empty with
     | Running { evaluation; _ } -> evaluation
-    | _ -> die "error is_target\n"
+    | _ -> die "error is_target"
   in
-  load >>| (fun () ->
-    Hashtbl.mem t.files file)
+  load >>| fun () ->
+  Hashtbl.mem t.files file
 
 and wait_for_file t fn ~targeting ~don't_load_dirs =
   let dir = Path.parent fn in
@@ -559,7 +564,7 @@ and wait_for_file t fn ~targeting ~don't_load_dirs =
     else begin
       match load_dir t dir ~targeting ~don't_load_dirs with
       | Running { evaluation; _ } -> evaluation
-      | _ -> die "error wait_for_file\n"
+      | _ -> die "error wait_for_file"
     end
   in
   load >>= fun () ->
