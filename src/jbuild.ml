@@ -840,9 +840,9 @@ module Menhir = struct
               (S.virt_var __POS__ "ROOT",
                Run (S.virt_text __POS__ "menhir",
                     t.flags @ [S.virt_var __POS__ "<"]))
-       ; fallback = Not_possible
-       ; loc
-       })
+        ; fallback = Not_possible
+        ; loc
+        })
     | Some merge_into ->
       let mly m = S.virt_text __POS__ (m ^ ".mly") in
       [{ Rule.
@@ -869,21 +869,21 @@ module Provides = struct
     ; file : string
     }
 
-(*  let v1 sexp =
-    match sexp with
-    | Atom (_, s) ->
+  (*  let v1 sexp =
+      match sexp with
+      | Atom (_, s) ->
       { name = s
       ; file =
-          match String.lsplit2 s ~on:':' with
-          | None        -> s
-          | Some (_, s) -> s
+      match String.lsplit2 s ~on:':' with
+      | None        -> s
+      | Some (_, s) -> s
       }
-    | List (_, [Atom (_, s); List (_, [Atom (_, "file"); Atom (_, file)])]) ->
+      | List (_, [Atom (_, s); List (_, [Atom (_, "file"); Atom (_, file)])]) ->
       { name = s
       ; file
       }
-    | sexp ->
-    of_sexp_error sexp "[<name>] or [<name> (file <file>)] expected"*)
+      | sexp ->
+      of_sexp_error sexp "[<name>] or [<name> (file <file>)] expected"*)
 end
 
 module Alias_conf = struct
@@ -959,9 +959,9 @@ module Stanzas = struct
   let parse pkgs sexps =
     let versions, sexps =
       List.partition_map sexps ~f:(function
-          | List (loc, [Atom (_, "jbuild_version"); ver]) ->
-            Inl (Jbuild_version.t ver, loc)
-          | sexp -> Inr sexp)
+        | List (loc, [Atom (_, "jbuild_version"); ver]) ->
+          Inl (Jbuild_version.t ver, loc)
+        | sexp -> Inr sexp)
     in
     let version =
       match versions with

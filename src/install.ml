@@ -154,10 +154,10 @@ let gen_install_file entries =
   let pr fmt = Printf.bprintf buf (fmt ^^ "\n") in
   List.iter (group entries) ~f:(fun (section, entries) ->
     pr "%s: [" (Section.to_string section);
-      List.iter entries ~f:(fun (e : Entry.t) ->
-        let src = Path.to_string e.src in
-        match e.dst with
-        | None     -> pr "  %S"      src
-        | Some dst -> pr "  %S {%S}" src dst);
+    List.iter entries ~f:(fun (e : Entry.t) ->
+      let src = Path.to_string e.src in
+      match e.dst with
+      | None     -> pr "  %S"      src
+      | Some dst -> pr "  %S {%S}" src dst);
     pr "]");
   Buffer.contents buf

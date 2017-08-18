@@ -37,11 +37,11 @@ let setup ?(log=Log.no_log) ?filter_out_optional_stanzas_with_missing_deps
   in
   Future.all
     (List.map workspace.contexts ~f:(function
-     | Workspace.Context.Default ->
-       Context.default ~merlin:(workspace.merlin_context = Some "default")
-         ~use_findlib ()
-     | Opam { name; switch; root; merlin } ->
-       Context.create_for_opam ~name ~switch ?root ~merlin ()))
+       | Workspace.Context.Default ->
+         Context.default ~merlin:(workspace.merlin_context = Some "default")
+           ~use_findlib ()
+       | Opam { name; switch; root; merlin } ->
+         Context.create_for_opam ~name ~switch ?root ~merlin ()))
   >>= fun contexts ->
   List.iter contexts ~f:(fun ctx ->
     Log.infof log "@[<1>Jbuilder context:@,%a@]@." Sexp.pp (Context.sexp_of_t ctx));

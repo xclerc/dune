@@ -80,7 +80,7 @@ let find_root () =
     if String_set.mem "jbuild-workspace" files then
       cont counter ~candidates:((0, dir, to_cwd) :: candidates) dir ~to_cwd
     else if String_set.exists files ~f:(fun fn ->
-        String.is_prefix fn ~prefix:"jbuild-workspace") then
+      String.is_prefix fn ~prefix:"jbuild-workspace") then
       cont counter ~candidates:((1, dir, to_cwd) :: candidates) dir ~to_cwd
     else
       cont counter ~candidates dir ~to_cwd
@@ -530,65 +530,66 @@ let external_lib_deps =
        >>= fun targets ->
        Build_system.all_lib_deps_by_context setup.build_system targets
        >>| fun all_lib_deps_by_context ->
-       let failure = String_map.fold ~init:false
-         all_lib_deps_by_context ~f:(fun ~key:context_name ~data:lib_deps acc ->
-           let internals =
-             Jbuild.Stanzas.lib_names
-               (match String_map.find context_name setup.Main.stanzas with
-                | None -> assert false
-                | Some x -> x)
-           in
-           let externals =
-             String_map.filter lib_deps ~f:(fun name _ ->
-               not (String_set.mem name internals))
-           in
-           if only_missing then begin
-             let context =
-               match List.find setup.contexts ~f:(fun c -> c.name = context_name) with
-               | None -> assert false
-               | Some c -> c
+       let failure =
+         String_map.fold ~init:false
+           all_lib_deps_by_context ~f:(fun ~key:context_name ~data:lib_deps acc ->
+             let internals =
+               Jbuild.Stanzas.lib_names
+                 (match String_map.find context_name setup.Main.stanzas with
+                  | None -> assert false
+                  | Some x -> x)
              in
-             let missing =
-               String_map.filter externals ~f:(fun name _ ->
-                 not (Findlib.available context.findlib name ~required_by:[]))
+             let externals =
+               String_map.filter lib_deps ~f:(fun name _ ->
+                 not (String_set.mem name internals))
              in
-             if String_map.is_empty missing then
-               acc
-             else if String_map.for_all missing ~f:(fun _ kind -> kind = Build.Optional)
-             then begin
-               Format.eprintf
-                 "@{<error>Error@}: The following libraries are missing \
-                  in the %s context:\n\
-                  %s@."
-                 context_name
-                 (format_external_libs missing);
-               false
+             if only_missing then begin
+               let context =
+                 match List.find setup.contexts ~f:(fun c -> c.name = context_name) with
+                 | None -> assert false
+                 | Some c -> c
+               in
+               let missing =
+                 String_map.filter externals ~f:(fun name _ ->
+                   not (Findlib.available context.findlib name ~required_by:[]))
+               in
+               if String_map.is_empty missing then
+                 acc
+               else if String_map.for_all missing ~f:(fun _ kind -> kind = Build.Optional)
+               then begin
+                 Format.eprintf
+                   "@{<error>Error@}: The following libraries are missing \
+                    in the %s context:\n\
+                    %s@."
+                   context_name
+                   (format_external_libs missing);
+                 false
+               end else begin
+                 Format.eprintf
+                   "@{<error>Error@}: The following libraries are missing \
+                    in the %s context:\n\
+                    %s\n\
+                    Hint: try: opam install %s@."
+                   context_name
+                   (format_external_libs missing)
+                   (String_map.bindings missing
+                    |> List.filter_map ~f:(fun (name, kind) ->
+                      match (kind : Build.lib_dep_kind) with
+                      | Optional -> None
+                      | Required -> Some (Findlib.root_package_name name))
+                    |> String_set.of_list
+                    |> String_set.elements
+                    |> String.concat ~sep:" ");
+                 true
+               end
              end else begin
-               Format.eprintf
-                 "@{<error>Error@}: The following libraries are missing \
-                  in the %s context:\n\
-                  %s\n\
-                  Hint: try: opam install %s@."
+               Printf.printf
+                 "These are the external library dependencies in the %s context:\n\
+                  %s\n%!"
                  context_name
-                 (format_external_libs missing)
-                 (String_map.bindings missing
-                  |> List.filter_map ~f:(fun (name, kind) ->
-                    match (kind : Build.lib_dep_kind) with
-                    | Optional -> None
-                    | Required -> Some (Findlib.root_package_name name))
-                  |> String_set.of_list
-                  |> String_set.elements
-                  |> String.concat ~sep:" ");
-               true
-             end
-           end else begin
-             Printf.printf
-               "These are the external library dependencies in the %s context:\n\
-                %s\n%!"
-               context_name
-               (format_external_libs externals);
-             acc
-           end)
+                 (format_external_libs externals);
+               acc
+             end)
        in
        if failure then die "")
   in

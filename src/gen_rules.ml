@@ -119,62 +119,62 @@ module Gen(P : Params) = struct
 
   let build_c_file (lib : Library.t) ~scope ~dir ~requires c_name =
     Scheme.arr (fun h_files ->
-    let src = Path.relative dir (c_name ^ ".c") in
-    let dst = Path.relative dir (c_name ^ ctx.ext_obj) in
-    let rule =
-      Build_interpret.Rule.make ~context:(SC.context sctx)
-        (Build.paths h_files
-         >>>
-         Build.fanout
-           (SC.expand_and_eval_set sctx ~scope ~dir lib.c_flags ~standard:(Context.cc_g ctx))
-           requires
-         >>>
-         Build.run ~context:ctx
-           (* We have to execute the rule in the library directory as the .o is produced in
-              the current directory *)
-           ~dir
-           (Dep ctx.ocamlc)
-           [ As (Utils.g ())
-           ; Dyn (fun (c_flags, libs) ->
-               S [ Lib.c_include_flags libs
-                 ; Arg_spec.quote_args "-ccopt" c_flags
-                 ])
-           ; A "-o"; Target dst
-           ; Dep src
-           ])
-    in
-    (rule, dst))
+      let src = Path.relative dir (c_name ^ ".c") in
+      let dst = Path.relative dir (c_name ^ ctx.ext_obj) in
+      let rule =
+        Build_interpret.Rule.make ~context:(SC.context sctx)
+          (Build.paths h_files
+           >>>
+           Build.fanout
+             (SC.expand_and_eval_set sctx ~scope ~dir lib.c_flags ~standard:(Context.cc_g ctx))
+             requires
+           >>>
+           Build.run ~context:ctx
+             (* We have to execute the rule in the library directory as the .o is produced in
+                the current directory *)
+             ~dir
+             (Dep ctx.ocamlc)
+             [ As (Utils.g ())
+             ; Dyn (fun (c_flags, libs) ->
+                 S [ Lib.c_include_flags libs
+                   ; Arg_spec.quote_args "-ccopt" c_flags
+                   ])
+             ; A "-o"; Target dst
+             ; Dep src
+             ])
+      in
+      (rule, dst))
 
   let build_cxx_file (lib : Library.t) ~scope ~dir ~requires c_name =
     Scheme.arr (fun h_files ->
-    let src = Path.relative dir (c_name ^ ".cpp") in
-    let dst = Path.relative dir (c_name ^ ctx.ext_obj) in
-    let rule =
-      Build_interpret.Rule.make ~context:(SC.context sctx)
-      (Build.paths h_files
-       >>>
-       Build.fanout
-         (SC.expand_and_eval_set sctx ~scope ~dir lib.cxx_flags ~standard:(Context.cc_g ctx))
-         requires
-       >>>
-       Build.run ~context:ctx
-         (* We have to execute the rule in the library directory as the .o is produced in
-            the current directory *)
-         ~dir
-         (SC.resolve_program sctx ctx.c_compiler
-            (* The C compiler surely is not in the tree *)
-            ~in_the_tree:false)
-         [ S [A "-I"; Path ctx.stdlib_dir]
-         ; As (SC.cxx_flags sctx)
-         ; Dyn (fun (cxx_flags, libs) ->
-             S [ Lib.c_include_flags libs
-               ; As cxx_flags
-               ])
-         ; A "-o"; Target dst
-         ; A "-c"; Dep src
-         ])
-    in
-    (rule, dst))
+      let src = Path.relative dir (c_name ^ ".cpp") in
+      let dst = Path.relative dir (c_name ^ ctx.ext_obj) in
+      let rule =
+        Build_interpret.Rule.make ~context:(SC.context sctx)
+          (Build.paths h_files
+           >>>
+           Build.fanout
+             (SC.expand_and_eval_set sctx ~scope ~dir lib.cxx_flags ~standard:(Context.cc_g ctx))
+             requires
+           >>>
+           Build.run ~context:ctx
+             (* We have to execute the rule in the library directory as the .o is produced in
+                the current directory *)
+             ~dir
+             (SC.resolve_program sctx ctx.c_compiler
+                (* The C compiler surely is not in the tree *)
+                ~in_the_tree:false)
+             [ S [A "-I"; Path ctx.stdlib_dir]
+             ; As (SC.cxx_flags sctx)
+             ; Dyn (fun (cxx_flags, libs) ->
+                 S [ Lib.c_include_flags libs
+                   ; As cxx_flags
+                   ])
+             ; A "-o"; Target dst
+             ; A "-c"; Dep src
+             ])
+      in
+      (rule, dst))
 
   (* Hack for the install file *)
   let modules_by_lib : (string, Module.t list) Hashtbl.t = Hashtbl.create 32
@@ -183,7 +183,7 @@ module Gen(P : Params) = struct
      -no-alias-deps], so we must sandbox the build of the alias module since the modules
      it references are built after. *)
   let alias_module_build_sandbox = Scanf.sscanf ctx.version "%u.%u"
-     (fun a b -> a, b) <= (4, 02)
+                                     (fun a b -> a, b) <= (4, 02)
 
   let library_rules (lib : Library.t) ~dir ~all_modules ~scope =
     let dep_kind = if lib.optional then Build.Optional else Required in
@@ -281,7 +281,7 @@ module Gen(P : Params) = struct
     Option.iter alias_module ~f:(fun m ->
       let flags = Ocaml_flags.default () in
       Module_compilation.build_module sctx m
-         ~js_of_ocaml
+        ~js_of_ocaml
         ~dynlink
         ~sandbox:alias_module_build_sandbox
         ~flags:(Ocaml_flags.append_common flags ["-w"; "-49"])
@@ -461,8 +461,8 @@ module Gen(P : Params) = struct
       (libs_and_cm
        &&&
        Build.fanout
-       (Ocaml_flags.get flags mode)
-       (SC.expand_and_eval_set sctx ~scope ~dir link_flags ~standard:[])
+         (Ocaml_flags.get flags mode)
+         (SC.expand_and_eval_set sctx ~scope ~dir link_flags ~standard:[])
        >>>
        Build.run ~context:ctx
          (Dep compiler)
@@ -1025,8 +1025,8 @@ Add it to your jbuild file to remove this warning.
       Scheme.all entry_schemes
       >>^*
       (fun entries ->
-      let entries = List.concat entries in
-      (local_install_rules entries ~package, entries))
+         let entries = List.concat entries in
+         (local_install_rules entries ~package, entries))
       >>^*
       fun (rules, doc_entries) ->
       let entries = local_install_entries (entries @ doc_entries) ~package in

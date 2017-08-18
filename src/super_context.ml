@@ -80,10 +80,10 @@ let get_external_dir t ~dir =
 
 let expand_vars t ~scope ~dir s =
   String_with_vars.expand s ~f:(fun _loc -> function
-  | "ROOT" -> Some (Path.reach ~from:dir t.context.build_dir)
-  | "SCOPE_ROOT" ->
-    Some (Path.reach ~from:dir (Path.append t.context.build_dir scope.Scope.root))
-  | var -> String_map.find var t.vars)
+    | "ROOT" -> Some (Path.reach ~from:dir t.context.build_dir)
+    | "SCOPE_ROOT" ->
+      Some (Path.reach ~from:dir (Path.append t.context.build_dir scope.Scope.root))
+    | var -> String_map.find var t.vars)
 
 let resolve_program_internal t ?hint ?(in_the_tree=true) bin =
   Artifacts.binary t.artifacts ?hint ~in_the_tree bin

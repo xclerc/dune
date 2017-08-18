@@ -61,7 +61,7 @@ let static_deps t ~all_targets_by_dir =
           let result = eval_glob dir re ~all_targets_by_dir in
           state := G_evaluated ((dir, re), result);
           let action_deps = Pset.union result acc.action_deps in
-            { acc with action_deps }
+          { acc with action_deps }
       end
     | If_file_exists (p, state) -> begin
         match !state with
