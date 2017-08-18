@@ -1065,7 +1065,8 @@ Add it to your jbuild file to remove this warning.
             List.filter_map files ~f:(fun location ->
               match location with
               | Glob_files { re; src_dir; dst_dir } ->
-                Some (package.name, Install.Dyn_entry.{re; src_dir = (Path.relative dir src_dir); dst_dir; section})
+                Some (package.name,
+                      Install.Dyn_entry.{re; src_dir = (Path.relative dir src_dir); dst_dir; section})
               | File _ -> None)
           | _ -> [])
       |> String_map.of_alist_multi

@@ -593,8 +593,9 @@ and wait_for_file t fn ~targeting ~don't_load_dirs =
     if Path.is_in_build_dir fn then
       match find_include_loop t fn targeting with
       | None -> die "no rule found for %s" (Utils.describe_target fn)
-      | Some msg -> die "no rule found for %s\nthe error may be caused by dependency cycle with include:\n%s"
-                      (Utils.describe_target fn) msg
+      | Some msg ->
+        die "no rule found for %s\nthe error may be caused by dependency cycle with include:\n%s"
+          (Utils.describe_target fn) msg
     else if Path.exists fn then return ()
     else die "file unavailable: %s" (Path.to_string fn)
   | Some (File_spec.T file) ->
@@ -605,7 +606,8 @@ and wait_for_file t fn ~targeting ~don't_load_dirs =
         wrap_build_errors t ~targeting:(Targeting.File fn) ~don't_load_dirs ~f:eval_rule
       in
       let rule_execution =
-        wrap_build_errors t ~targeting:(Targeting.File fn) ~don't_load_dirs ~f:(exec_rule rule_evaluation)
+        wrap_build_errors t ~targeting:(Targeting.File fn) ~don't_load_dirs
+          ~f:(exec_rule rule_evaluation)
       in
       file.rule.exec <-
         Running { for_file = targeting
@@ -617,7 +619,8 @@ and wait_for_file t fn ~targeting ~don't_load_dirs =
     | Evaluating_rule { for_file; rule_evaluation; exec_rule } ->
       file.rule.exec <- Starting { for_file = targeting };
       let rule_execution =
-        wrap_build_errors t ~targeting:(Targeting.File fn) ~don't_load_dirs ~f:(exec_rule rule_evaluation)
+        wrap_build_errors t ~targeting:(Targeting.File fn) ~don't_load_dirs
+          ~f:(exec_rule rule_evaluation)
       in
       file.rule.exec <-
         Running { for_file
@@ -1100,7 +1103,8 @@ let build_rules t ?(recursive=false) targets =
           | Not_started { eval_rule; exec_rule } ->
             ir.exec <- Starting { for_file = (Targeting.File fn) };
             let rule_evaluation =
-              wrap_build_errors t ~targeting:(Targeting.File fn) ~don't_load_dirs:Pset.empty ~f:eval_rule
+              wrap_build_errors t ~targeting:(Targeting.File fn)
+                ~don't_load_dirs:Pset.empty ~f:eval_rule
             in
             ir.exec <-
               Evaluating_rule { for_file = (Targeting.File fn)

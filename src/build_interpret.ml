@@ -196,8 +196,8 @@ let check_dir_deps t ~all_targets_by_dir =
         match !state with
         | G_evaluated ((dir, re), ps) ->
           let new_res = eval_glob dir re ~all_targets_by_dir in
-          if Pset.compare new_res ps <> 0 then die "glob evaluation in dir %s changed unexpectedly"
-                                                 (Path.to_string dir)
+          if Pset.compare new_res ps <> 0 then
+            die "glob evaluation in dir %s changed unexpectedly" (Path.to_string dir)
         | G_unevaluated _ -> die "unevaluated globs in check_dir_deps"
       end
     | If_file_exists (p, state) -> begin
