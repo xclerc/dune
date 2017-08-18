@@ -1,0 +1,4 @@
+(rule
+ ((targets (a.y))
+  (deps ((glob_files ../*.y)))
+  (action (copy ../a.y a.y))))

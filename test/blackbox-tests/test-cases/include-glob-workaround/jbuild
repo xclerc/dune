@@ -1,0 +1,10 @@
+(rule
+ ((targets (b.x))
+  (deps (a/a.y))
+  (action (copy a/a.y b.x))))
+
+(rule
+ ((targets (i.jbuild))
+  (action (system "echo '(rule (copy b.y a.y))' > i.jbuild"))))
+
+(include i.jbuild)
