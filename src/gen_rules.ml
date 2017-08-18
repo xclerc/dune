@@ -699,28 +699,29 @@ Add it to your jbuild file to remove this warning.
     let file = Path.relative dir incl.Include.file in
     let include_rules =
       Scheme.load_sexps file
-      >>^* (fun sexps ->
-        let stanzas = Stanzas.parse scope sexps in
-        List.map stanzas ~f:(fun stanza ->
-          match stanza with
-          | Stanza.Rule rule ->
-            let targets : SC.Action.targets = match rule.targets with
-              | Infer -> Infer
-              | Static fns -> Static (List.map fns ~f:(Path.relative dir))
-            in
-            let build =
-              (SC.Deps.interpret sctx ~scope ~dir rule.deps
-               >>>
-               SC.Action.run
-                 sctx
-                 rule.action
-                 ~dir
-                 ~dep_kind:Required
-                 ~targets
-                 ~scope)
-            in
-            Build_interpret.Rule.make build
-          | _ -> die "Only rule stanzas are allowed in included files\n"))
+      >>^*
+      fun sexps ->
+      let stanzas = Stanzas.parse scope sexps in
+      List.map stanzas ~f:(fun stanza ->
+        match stanza with
+        | Stanza.Rule rule ->
+          let targets : SC.Action.targets = match rule.targets with
+            | Infer -> Infer
+            | Static fns -> Static (List.map fns ~f:(Path.relative dir))
+          in
+          let build =
+            (SC.Deps.interpret sctx ~scope ~dir rule.deps
+             >>>
+             SC.Action.run
+               sctx
+               rule.action
+               ~dir
+               ~dep_kind:Required
+               ~targets
+               ~scope)
+          in
+          Build_interpret.Rule.make build
+        | _ -> die "Only rule stanzas are allowed in included files\n")
     in
     SC.add_scheme sctx dir (Scheme.dyn_rules include_rules)
 
