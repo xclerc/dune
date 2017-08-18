@@ -188,7 +188,7 @@ module Build_error = struct
         begin
           let (File_spec.T file) = find_file_exn t targeting in
           match file.rule.exec with
-          | Not_started _ -> acc  (* this was assert false before *)
+          | Not_started _ -> acc  (* not sure if this should be assert false *)
           | Running { for_file; _ } | Starting { for_file }
           | Evaluating_rule { for_file; _ } ->
             if (Targeting.path for_file) = targeting then
@@ -196,7 +196,19 @@ module Build_error = struct
             else
               build_path (for_file :: acc) for_file ~seen
         end
-      | Dir _ -> acc
+      | Dir targeting ->
+        begin
+          match
+            Pmap.find_exn targeting t.dirs_load ~string_of_key:Path.to_string
+              ~desc:(fun _ -> "<target to dir>")
+          with
+          | Load_dir_status.Starting { for_file } | Running { for_file; _ } ->
+            if (Targeting.path for_file) = targeting then
+              acc
+            else
+              build_path (for_file :: acc) for_file ~seen
+        end
+
     in
     let dep_path = build_path [targeting] targeting ~seen:Pset.empty in
     let dep_path = List.map dep_path ~f:Targeting.path in
