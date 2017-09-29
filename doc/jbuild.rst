@@ -902,6 +902,12 @@ result it is recommended to write ``(flags ...)`` fields as follows:
 
     (flags (:standard <my options>))
 
+For instance:
+
+::
+
+    (flags (:standard -O3 -w +42))
+
 .. _jbuild-jsoo:
 
 js_of_ocaml
