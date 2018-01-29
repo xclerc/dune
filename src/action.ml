@@ -594,9 +594,11 @@ module Promotion = struct
     let register t = db := t :: !db
 
     let promote { src; dst } =
-      Format.eprintf "Promoting %s to %s.@."
-        (Path.to_string_maybe_quoted src)
-        (Path.to_string_maybe_quoted dst);
+      (* It is important to delete the file first. On OSX, timestamps are not precise
+         enough, so if the build is fast enough, mtime won't be enough to detect that the
+         file might has changed, which will break incremental compilation. *)
+      Path.unlink_no_err dst;
+      Utils.Cached_digest.remove dst;
       Io.copy_file
         ~src:(Path.to_string src)
         ~dst:(Path.to_string dst)
@@ -634,6 +636,9 @@ module Promotion = struct
       match srcs with
       | [] -> assert false
       | src :: others ->
+        Format.eprintf "Promoting %s to %s.@."
+          (Path.to_string_maybe_quoted src)
+          (Path.to_string_maybe_quoted dst);
         File.promote { src; dst };
         List.iter others ~f:(fun path ->
           Format.eprintf " -> ignored %s.@."

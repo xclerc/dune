@@ -712,9 +712,10 @@ let rec compile_rule t ?(copy_source=false) pre_rule =
           let in_source_tree = Option.value_exn (Path.drop_build_context path) in
           if mode = Promote_but_delete_on_clean then
             Promoted_to_delete.add in_source_tree;
-          Io.copy_file
-            ~src:(Path.to_string path)
-            ~dst:(Path.to_string in_source_tree))
+          Action.Promotion.File.promote
+            { src = path
+            ; dst = in_source_tree
+            })
     ) else
       return ()
   in
@@ -1056,7 +1057,6 @@ module Trace = struct
   let file = "_build/.db"
 
   let dump (trace : t) =
-    Utils.Cached_digest.dump ();
     let sexp =
       Sexp.List (
         Hashtbl.fold trace ~init:Pmap.empty ~f:(fun ~key ~data acc ->
@@ -1069,7 +1069,6 @@ module Trace = struct
       Io.write_file file (Sexp.to_string sexp)
 
   let load () =
-    Utils.Cached_digest.load ();
     let trace = Hashtbl.create 1024 in
     if Sys.file_exists file then begin
       let sexp = Sexp.load ~fname:file ~mode:Single in
@@ -1090,11 +1089,15 @@ let all_targets t =
   Hashtbl.fold t.files ~init:[] ~f:(fun ~key ~data:_ acc -> key :: acc)
 
 let finalize t =
+  (* Promotion must be handled before dumping the digest cache, as it might delete some
+     entries. *)
+  Action.Promotion.finalize ();
   Promoted_to_delete.dump ();
-  Trace.dump t.trace;
-  Action.Promotion.finalize ()
+  Utils.Cached_digest.dump ();
+  Trace.dump t.trace
 
 let create ~contexts ~file_tree =
+  Utils.Cached_digest.load ();
   let contexts =
     List.map contexts ~f:(fun c -> (c.Context.name, c))
     |> String_map.of_alist_exn

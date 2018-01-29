@@ -87,6 +87,9 @@
 - Always build `boot.exe` as a bytecode program. It makes the build of
   jbuilder faster and fix the build on some architectures (#463, fixes #446)
 
+- Fix incremental builds on OSX. Uses mtime + inode number to detect
+  when files need to be rehashed (#460, fix #456)
+
 1.0+beta16 (05/11/2017)
 -----------------------
 

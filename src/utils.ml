@@ -164,10 +164,31 @@ let install_file ~package ~findlib_toolchain =
   | Some x -> sprintf "%s-%s.install" package x
 
 module Cached_digest = struct
+  module Stats = struct
+    (* Subset of [Unix.stat].
+
+       The intent is to have the smallest structure such that if the file contents
+       changes, this structure changes as well. *)
+    type t =
+      { inode : int
+      ; mtime : float
+      }
+
+    let of_file fn =
+      let st = Unix.stat (Path.to_string fn) in
+      { inode = st.st_ino
+      ; mtime = st.st_mtime
+      }
+
+    let equal t { inode; mtime } =
+      t.inode = inode &&
+      t.mtime = mtime
+  end
+
   type file =
-    { mutable digest            : Digest.t
-    ; mutable timestamp         : float
-    ; mutable timestamp_checked : bool
+    { mutable digest        : Digest.t
+    ; mutable stats         : Stats.t
+    ; mutable stats_checked : bool
     }
 
   let cache = Hashtbl.create 1024
@@ -175,33 +196,34 @@ module Cached_digest = struct
   let file fn =
     match Hashtbl.find cache fn with
     | Some x ->
-      if x.timestamp_checked then
+      if x.stats_checked then
         x.digest
       else begin
-        let mtime = (Unix.stat (Path.to_string fn)).st_mtime in
-        if mtime <> x.timestamp then begin
+        let stats = Stats.of_file fn in
+        if not (Stats.equal stats x.stats) then begin
           let digest = Digest.file (Path.to_string fn) in
-          x.digest    <- digest;
-          x.timestamp <- mtime;
+          x.digest <- digest;
+          x.stats  <- stats;
         end;
-        x.timestamp_checked <- true;
+        x.stats_checked <- true;
         x.digest
       end
     | None ->
       let digest = Digest.file (Path.to_string fn) in
       Hashtbl.add cache ~key:fn
         ~data:{ digest
-              ; timestamp = (Unix.stat (Path.to_string fn)).st_mtime
-              ; timestamp_checked = true
+              ; stats = Stats.of_file fn
+              ; stats_checked = true
               };
       digest
 
   let remove fn =
     match Hashtbl.find cache fn with
     | None -> ()
-    | Some file -> file.timestamp_checked <- false
+    | Some file -> file.stats_checked <- false
 
-  let db_file = "_build/.digest-db"
+  let old_files = ["_build/.digest-db"]
+  let db_file = "_build/.digest-db.v2"
 
   let dump () =
     let module Pmap = Path.Map in
@@ -211,31 +233,42 @@ module Cached_digest = struct
           Pmap.add acc ~key ~data)
         |> Path.Map.bindings
         |> List.map ~f:(fun (path, file) ->
+          let { digest; stats = { inode; mtime }; stats_checked = _ } = file in
           Sexp.List [ Atom (Path.to_string path)
-                    ; Atom (Digest.to_hex file.digest)
-                    ; Atom (Int64.to_string (Int64.bits_of_float file.timestamp))
+                    ; Atom (Digest.to_hex digest)
+                    ; Atom (string_of_int inode)
+                    ; Atom (Int64.to_string (Int64.bits_of_float mtime))
                     ]))
     in
-    if Sys.file_exists "_build" then
-      Io.write_file db_file (Sexp.to_string sexp)
+    if Sys.file_exists "_build" then begin
+      Io.write_file db_file (Sexp.to_string sexp);
+      List.iter old_files ~f:(fun fn ->
+        try Sys.remove fn with _ -> ())
+    end
 
   let load () =
     if Sys.file_exists db_file then begin
       let sexp = Sexp.load ~fname:db_file ~mode:Single in
-      let bindings =
+      let binding (sexp : Sexp.Ast.t) =
         let open Sexp.Of_sexp in
-        list
-          (triple
-             Path.t
-             (fun s -> Digest.from_hex (string s))
-             (fun s -> Int64.float_of_bits (Int64.of_string (string s)))
-          ) sexp
+        match sexp with
+        | List (_, [path; digest; inode; mtime]) ->
+          let path = Path.t path in
+          let file =
+            { digest = Digest.from_hex (string digest)
+            ; stats = { inode = int inode
+                      ; mtime = Int64.float_of_bits
+                                  (Int64.of_string (string mtime))
+                      }
+            ; stats_checked = false
+            }
+          in
+          Hashtbl.add cache ~key:path ~data:file
+        | _ ->
+          of_sexp_error sexp "S-expression of the form (_ _ _ _) expected"
       in
-      List.iter bindings ~f:(fun (path, digest, timestamp) ->
-        Hashtbl.add cache ~key:path
-          ~data:{ digest
-                ; timestamp
-                ; timestamp_checked = false
-                });
+      match sexp with
+      | Atom _ -> Sexp.Of_sexp.of_sexp_error sexp "list expected"
+      | List (_, l) -> List.iter l ~f:binding
     end
 end

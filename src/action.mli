@@ -140,6 +140,9 @@ module Promotion : sig
 
     (** Register a file to promote *)
     val register : t -> unit
+
+    (** Promote a file immediatly *)
+    val promote : t -> unit
   end
 
   (** Promote all registered files if [!Clflags.auto_promote]. Otherwise dump the list of
