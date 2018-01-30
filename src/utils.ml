@@ -91,7 +91,7 @@ let analyse_target fn =
             match String.rsplit2 (Path.basename fn) ~on:'-' with
             | None -> assert false
             | Some (name, digest) ->
-              assert (String.length digest = 32);
+              assert (String.length digest = 16);
               name
           in
           Alias (ctx, Path.relative (Path.parent fn) basename)

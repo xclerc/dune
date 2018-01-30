@@ -23,14 +23,17 @@ CAMLprim uint64_t jbuilder_digest_file(value fn)
   len = lseek(fd, 0, SEEK_END);
   lseek(fd, 0, SEEK_SET);
 
-  ptr = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-  if (ptr == MAP_FAILED) {
-    error = errno;
-    close(fd);
-    unix_error(error, "mmap", fn);
+  if (len == 0 || len == (off_t)-1)
+    result = XXH64("", 0, 0);
+  else {
+    ptr = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (ptr == MAP_FAILED) {
+      error = errno;
+      close(fd);
+      unix_error(error, "mmap", fn);
+    }
+    result = XXH64(ptr, len, 0);
   }
-
-  result = XXH64(ptr, len, 0);
 
   munmap(ptr, len);
   close(fd);
