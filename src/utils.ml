@@ -186,7 +186,7 @@ module Cached_digest = struct
   end
 
   type file =
-    { mutable digest        : Digest.t
+    { mutable digest        : XxHash.t
     ; mutable stats         : Stats.t
     ; mutable stats_checked : bool
     }
@@ -201,7 +201,7 @@ module Cached_digest = struct
       else begin
         let stats = Stats.of_file fn in
         if not (Stats.equal stats x.stats) then begin
-          let digest = Digest.file (Path.to_string fn) in
+          let digest = XxHash.file (Path.to_string fn) in
           x.digest <- digest;
           x.stats  <- stats;
         end;
@@ -209,7 +209,7 @@ module Cached_digest = struct
         x.digest
       end
     | None ->
-      let digest = Digest.file (Path.to_string fn) in
+      let digest = XxHash.file (Path.to_string fn) in
       Hashtbl.add cache ~key:fn
         ~data:{ digest
               ; stats = Stats.of_file fn
@@ -223,7 +223,7 @@ module Cached_digest = struct
     | Some file -> file.stats_checked <- false
 
   let old_files = ["_build/.digest-db"]
-  let db_file = "_build/.digest-db.v2"
+  let db_file = "_build/.digest-db.v3"
 
   let dump () =
     let module Pmap = Path.Map in
@@ -236,7 +236,7 @@ module Cached_digest = struct
           if Path.is_in_build_dir path then Some (
             let { digest; stats = { inode; mtime }; stats_checked = _ } = file in
             Sexp.List [ Atom (Path.to_string path)
-                      ; Atom (Digest.to_hex digest)
+                      ; Atom (XxHash.to_hex digest)
                       ; Atom (string_of_int inode)
                       ; Atom (Int64.to_string (Int64.bits_of_float mtime))
                       ]
@@ -258,7 +258,7 @@ module Cached_digest = struct
         | List (_, [path; digest; inode; mtime]) ->
           let path = Path.t path in
           let file =
-            { digest = Digest.from_hex (string digest)
+            { digest = XxHash.of_hex (string digest)
             ; stats = { inode = int inode
                       ; mtime = Int64.float_of_bits
                                   (Int64.of_string (string mtime))

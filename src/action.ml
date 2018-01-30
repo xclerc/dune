@@ -784,8 +784,7 @@ let rec exec t ~ectx ~dir ~env_extra ~stdout_to ~stderr_to =
         List.map paths ~f:(fun fn ->
           (fn, Utils.Cached_digest.file fn))
       in
-      Digest.string
-        (Marshal.to_string data [])
+      XxHash.to_hex (XxHash.string (Marshal.to_string data []))
     in
     exec_echo stdout_to s
   | Diff { optional; file1; file2 } ->

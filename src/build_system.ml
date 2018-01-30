@@ -236,7 +236,7 @@ module Dir_status = struct
     | Pending of waiting_for_load_dir
 
   type alias_action =
-    { stamp  : Digest.t
+    { stamp  : XxHash.t
     ; action : (unit, Action.t) Build.t
     ; locks  : Path.t list
     }
@@ -277,7 +277,7 @@ type t =
   ; contexts    : Context.t String_map.t
   ; (* Table from target to digest of
        [(deps (filename + contents), targets (filename only), action)] *)
-    trace       : (Path.t, Digest.t) Hashtbl.t
+    trace       : (Path.t, XxHash.t) Hashtbl.t
   ; file_tree   : File_tree.t
   ; mutable local_mkdirs : Path.Local.Set.t
   ; mutable dirs : (Path.t, Dir_status.t) Hashtbl.t
@@ -643,11 +643,11 @@ let rec compile_rule t ?(copy_source=false) pre_rule =
          Option.map context ~f:(fun c -> c.name),
          action)
       in
-      Digest.string (Marshal.to_string trace [])
+      XxHash.string (Marshal.to_string trace [])
     in
     let sandbox_dir =
       if sandbox then
-        Some (Path.relative sandbox_dir (Digest.to_hex hash))
+        Some (Path.relative sandbox_dir (XxHash.to_hex hash))
       else
         None
     in
@@ -794,7 +794,7 @@ and load_dir t ~dir =
           let rules, deps =
             List.fold_left actions ~init:(rules, deps)
               ~f:(fun (rules, deps) { Dir_status. stamp; action; locks } ->
-                let path = Path.extend_basename base_path ~suffix:("-" ^ Digest.to_hex stamp) in
+                let path = Path.extend_basename base_path ~suffix:("-" ^ XxHash.to_hex stamp) in
                 let rule =
                   Pre_rule.make ~locks
                     (Build.progn [ action; Build.create_file path ])
@@ -1022,7 +1022,7 @@ let stamp_file_for_files_of t ~dir ~ext =
         |> String_map.of_alist_multi
       in
       { files_by_ext
-      ; dir_hash = Path.to_string dir |> Digest.string |> Digest.to_hex
+      ; dir_hash = Path.to_string dir |> XxHash.string |> XxHash.to_hex
       ; stamps = String_map.empty
       })
   in
@@ -1047,9 +1047,9 @@ let stamp_file_for_files_of t ~dir ~ext =
 
 
 module Trace = struct
-  type t = (Path.t, Digest.t) Hashtbl.t
+  type t = (Path.t, XxHash.t) Hashtbl.t
 
-  let file = "_build/.db"
+  let file = "_build/.db.v2"
 
   let dump (trace : t) =
     let sexp =
@@ -1058,7 +1058,7 @@ module Trace = struct
           Pmap.add acc ~key ~data)
         |> Path.Map.bindings
         |> List.map ~f:(fun (path, hash) ->
-          Sexp.List [ Atom (Path.to_string path); Atom (Digest.to_hex hash) ]))
+          Sexp.List [ Atom (Path.to_string path); Atom (XxHash.to_hex hash) ]))
     in
     if Sys.file_exists "_build" then
       Io.write_file file (Sexp.to_string sexp)
@@ -1069,7 +1069,7 @@ module Trace = struct
       let sexp = Sexp.load ~fname:file ~mode:Single in
       let bindings =
         let open Sexp.Of_sexp in
-        list (pair Path.t (fun s -> Digest.from_hex (string s))) sexp
+        list (pair Path.t (fun s -> XxHash.of_hex (string s))) sexp
       in
       List.iter bindings ~f:(fun (path, hash) ->
         Hashtbl.add trace ~key:path ~data:hash);
@@ -1400,7 +1400,7 @@ module Alias = struct
 
   let add_action build_system t ?(locks=[]) ~stamp action =
     let def = get_alias_def build_system t in
-    def.actions <- { stamp = Digest.string (Sexp.to_string stamp)
+    def.actions <- { stamp = XxHash.string (Sexp.to_string stamp)
                    ; action
                    ; locks
                    } :: def.actions

@@ -56,7 +56,7 @@ val install_file : package:string -> findlib_toolchain:string option -> string
 (** Digest files with caching *)
 module Cached_digest : sig
   (** Digest the contents of the following file *)
-  val file : Path.t -> Digest.t
+  val file : Path.t -> XxHash.t
 
   (** Clear the following digest from the cache *)
   val remove : Path.t -> unit
