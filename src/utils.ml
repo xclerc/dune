@@ -232,13 +232,16 @@ module Cached_digest = struct
         Hashtbl.fold cache ~init:Pmap.empty ~f:(fun ~key ~data acc ->
           Pmap.add acc ~key ~data)
         |> Path.Map.bindings
-        |> List.map ~f:(fun (path, file) ->
-          let { digest; stats = { inode; mtime }; stats_checked = _ } = file in
-          Sexp.List [ Atom (Path.to_string path)
-                    ; Atom (Digest.to_hex digest)
-                    ; Atom (string_of_int inode)
-                    ; Atom (Int64.to_string (Int64.bits_of_float mtime))
-                    ]))
+        |> List.filter_map ~f:(fun (path, file) ->
+          if Path.is_in_build_dir path then Some (
+            let { digest; stats = { inode; mtime }; stats_checked = _ } = file in
+            Sexp.List [ Atom (Path.to_string path)
+                      ; Atom (Digest.to_hex digest)
+                      ; Atom (string_of_int inode)
+                      ; Atom (Int64.to_string (Int64.bits_of_float mtime))
+                      ]
+          ) else
+            None))
     in
     if Sys.file_exists "_build" then begin
       Io.write_file db_file (Sexp.to_string sexp);
