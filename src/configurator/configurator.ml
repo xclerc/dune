@@ -1,15 +1,10 @@
-open Base
-open Stdio
+open Jbuilder.Import
+module Io = Jbuilder.Io
+module Utils = Jbuilder.Utils
 
-module Sys        = Caml.Sys
-module Fn         = Caml.Filename
-module Arg        = Caml.Arg
-module Buffer     = Caml.Buffer
-module Pervasives = Caml.Pervasives
+module Sexp = Usexp
 
-let ( ^^ ) = Caml.( ^^ )
-let ( ^/ ) = Fn.concat
-let sprintf = Printf.sprintf
+let ( ^/ ) = Filename.concat
 
 exception Fatal_error of string
 
@@ -28,7 +23,7 @@ type t =
   ; c_compiler        : string
   ; stdlib_dir        : string
   ; ccomp_type        : string
-  ; ocamlc_config     : string Map.M(String).t
+  ; ocamlc_config     : string String_map.t
   ; ocamlc_config_cmd : string
   }
 
@@ -47,11 +42,11 @@ module Temp = struct
   let prng = lazy(Random.State.make_self_init ())
 
   let gen_name ~temp_dir ~prefix ~suffix =
-    let rnd = Int.bit_and (Random.State.bits (Lazy.force prng)) 0xFFFFFF in
+    let rnd = Random.State.bits (Lazy.force prng) land 0xFFFFFF in
     temp_dir ^/ (Printf.sprintf "%s%06x%s" prefix rnd suffix)
 
   let create ~prefix ~suffix ~mk =
-    let temp_dir = Fn.get_temp_dir_name () in
+    let temp_dir = Filename.get_temp_dir_name () in
     let rec try_name counter =
       let name = gen_name ~temp_dir ~prefix ~suffix in
       match mk name with
@@ -63,7 +58,7 @@ module Temp = struct
 
   let create_temp_dir ~prefix ~suffix =
     let dir = create ~prefix ~suffix ~mk:(fun name -> Unix.mkdir name 0o700) in
-    Caml.at_exit (fun () -> rm_rf dir);
+    at_exit (fun () -> rm_rf dir);
     dir
 end
 
@@ -129,7 +124,7 @@ let quote =
   in
   fun s ->
     if String.is_empty s || String.exists ~f:need_quote s
-    then Fn.quote s
+    then Filename.quote s
     else s
 
 let command_line prog args =
@@ -143,13 +138,13 @@ let run t ~dir cmd =
   let exit_code =
     Printf.ksprintf
       Sys.command "cd %s && %s > %s 2> %s"
-      (Fn.quote dir)
+      (Filename.quote dir)
       cmd
-      (Fn.quote stdout_fn)
-      (Fn.quote stderr_fn)
+      (Filename.quote stdout_fn)
+      (Filename.quote stderr_fn)
   in
-  let stdout = In_channel.read_all stdout_fn in
-  let stderr = In_channel.read_all stderr_fn in
+  let stdout = Io.read_file stdout_fn in
+  let stderr = Io.read_file stderr_fn in
   logf t "-> process exited with code %d" exit_code;
   logf t "-> stdout:";
   List.iter (String.split_lines stdout) ~f:(logf t " | %s");
@@ -169,11 +164,11 @@ let run_capture_exn t ~dir cmd =
 let run_ok t ~dir cmd = (run t ~dir cmd).exit_code = 0
 
 let get_ocaml_config_var_exn ~ocamlc_config_cmd map var =
-  match Map.find map var with
+  match String_map.find var map with
   | None -> die "variable %S not found in the output of `%s`" var ocamlc_config_cmd
   | Some s -> s
 
-let ocaml_config_var t var = Map.find t.ocamlc_config var
+let ocaml_config_var t var = String_map.find var t.ocamlc_config
 let ocaml_config_var_exn t var =
   get_ocaml_config_var_exn t.ocamlc_config var
     ~ocamlc_config_cmd:t.ocamlc_config_cmd
@@ -200,31 +195,17 @@ let create ?dest_dir ?ocamlc ?(log=ignore) name =
     ; c_compiler    = ""
     ; stdlib_dir    = ""
     ; ccomp_type    = ""
-    ; ocamlc_config = Map.empty (module String)
+    ; ocamlc_config = String_map.empty
     ; ocamlc_config_cmd
     }
   in
   let ocamlc_config =
-    let colon_space = String.Search_pattern.create ": " in
     run_capture_exn t ~dir:dest_dir ocamlc_config_cmd
     |> String.split_lines
-    |>  List.map ~f:(fun line ->
-      match String.Search_pattern.index colon_space ~in_:line with
-      | Some i ->
-        (String.sub line ~pos:0 ~len:i,
-         String.sub line ~pos:(i + 2) ~len:(String.length line - i - 2))
-      | None ->
-        die "unrecognized line in the output of `%s`: %s" ocamlc_config_cmd
-          line)
-    |> Map.of_alist (module String)
-    |> function
-    | `Ok x -> x
-    | `Duplicate_key key ->
-      die "variable %S present twice in the output of `%s`" key ocamlc_config_cmd
-  in
+    |> Utils.parse_ocamlc_config ~cmd:ocamlc_config_cmd in
   let get = get_ocaml_config_var_exn ocamlc_config ~ocamlc_config_cmd in
   let c_compiler =
-    match Map.find ocamlc_config "c_compiler" with
+    match String_map.find "c_compiler" ocamlc_config with
     | Some c_comp -> c_comp ^ " " ^ get "ocamlc_cflags"
     | None -> get "bytecomp_c_compiler"
   in
@@ -249,13 +230,13 @@ let compile_c_prog t ?(c_flags=[]) ?(link_flags=[]) code =
   let c_fname = base ^ ".c" in
   let obj_fname = base ^ t.ext_obj in
   let exe_fname = base ^ ".exe" in
-  Out_channel.write_all c_fname ~data:code;
+  Io.write_file c_fname code;
   logf t "compiling c program:";
   List.iter (String.split_lines code) ~f:(logf t " | %s");
   let run_ok args =
     run_ok t ~dir
       (String.concat ~sep:" "
-         (t.c_compiler :: List.map args ~f:Fn.quote))
+         (t.c_compiler :: List.map args ~f:Filename.quote))
   in
   let ok =
     if need_to_compile_and_link_separately t then
@@ -295,17 +276,6 @@ module C_define = struct
       | (Int | String), Switch -> -1
       | Int, String -> 1
       | String, Int -> -1
-
-    let sexp_of_t = function
-      | Switch -> Sexp.Atom "switch"
-      | Int -> Sexp.Atom "int"
-      | String -> Sexp.Atom "string"
-
-    let t_of_sexp = function
-      | Sexp.Atom "switch" -> Switch
-      | Sexp.Atom "int" -> Int
-      | Sexp.Atom "string" -> String
-      | s -> raise (Sexp.Of_sexp_error (Failure "C_define.Type.t_of_sexp", s))
   end
 
   module Value = struct
@@ -316,28 +286,13 @@ module C_define = struct
 
     let compare x y =
       match x, y with
-      | Switch x, Switch y -> Bool.compare x y
-      | Int x, Int y -> Int.compare x y
-      | String x, String y -> String.compare x y
+      | Switch x, Switch y -> compare x y
+      | Int x, Int y -> compare x y
+      | String x, String y -> compare x y
       | Switch _, (Int _ | String _) -> 1
       | (Int _ | String _), Switch _ -> -1
       | Int _, String _ -> 1
       | String _, Int _ -> -1
-
-    let sexp_of_t =
-      let open Sexp in
-      function
-      | Switch b -> List [Atom "switch"; Bool.sexp_of_t b]
-      | Int i -> List [Atom "int"; Int.sexp_of_t i]
-      | String s -> List [Atom "string"; String.sexp_of_t s]
-
-    let t_of_sexp =
-      let open Sexp in
-      function
-      | List [Atom "switch"; x] -> Switch (Bool.t_of_sexp x)
-      | List [Atom "int"; x] -> Int (Int.t_of_sexp x)
-      | List [Atom "string"; x] -> String (String.t_of_sexp x)
-      | s -> raise (Sexp.Of_sexp_error (Failure "C_define.Value.t_of_sexp", s))
   end
 
   let import t ?c_flags ?link_flags ~includes vars =
@@ -366,14 +321,14 @@ module C_define = struct
     match compile_c_prog t ?c_flags ?link_flags code with
     | Error () -> die "failed to compile program"
     | Ok exe ->
-      run_capture_exn t ~dir:(Fn.dirname exe) (command_line exe [])
+      run_capture_exn t ~dir:(Filename.dirname exe) (command_line exe [])
       |> String.split_lines
       |> List.map ~f:(fun s : (string * Value.t) ->
         let var, data = String.lsplit2_exn s ~on:'=' in
         (var,
          match String.lsplit2_exn data ~on:':' with
-         | "b", s -> Switch (Bool.of_string s)
-         | "i", s -> Int    (Int. of_string s)
+         | "b", s -> Switch (bool_of_string s)
+         | "i", s -> Int    (int_of_string s)
          | "s", s -> String s
          | _ -> assert false))
 
@@ -382,8 +337,8 @@ module C_define = struct
       match protection_var with
       | Some v -> v
       | None ->
-        String.map (t.name ^ "_" ^ Fn.basename fname) ~f:(function
-          | 'a'..'z' as c -> Char.uppercase c
+        String.map (t.name ^ "_" ^ Filename.basename fname) ~f:(function
+          | 'a'..'z' as c -> Char.uppercase_ascii c
           | 'A'..'Z' | '0'..'9' as c -> c
           | _ -> '_')
     in
@@ -408,7 +363,7 @@ module C_define = struct
     logf t "writing header file %s" fname;
     List.iter lines ~f:(logf t " | %s");
     let tmp_fname = fname ^ ".tmp" in
-    Out_channel.write_lines tmp_fname lines;
+    Io.write_lines tmp_fname lines;
     Sys.rename tmp_fname fname
 end
 
@@ -448,7 +403,7 @@ module Pkg_config = struct
           match find_in_path c "brew" with
           | Some brew ->
             let prefix =
-              String.strip (run_capture_exn c ~dir (command_line brew ["--prefix"]))
+              String.trim (run_capture_exn c ~dir (command_line brew ["--prefix"]))
             in
             sprintf "env PKG_CONFIG_PATH=%s/opt/%s/lib/pkgconfig:$PKG_CONFIG_PATH "
               (quote prefix) package
@@ -460,7 +415,7 @@ module Pkg_config = struct
     if run_ok c ~dir (sprintf "%s%s %s" env pkg_config package) then
       let run what =
         match
-          String.strip
+          String.trim
             (run_capture_exn c ~dir (sprintf "%s%s %s %s" env pkg_config what package))
         with
         | "" -> []
@@ -489,7 +444,7 @@ let main ?(args=[]) ~name f =
        ] @ args)
   in
   let anon s = raise (Arg.Bad (sprintf "don't know what to do with %s" s)) in
-  let usage = sprintf "%s [OPTIONS]" (Fn.basename Sys.executable_name) in
+  let usage = sprintf "%s [OPTIONS]" (Filename.basename Sys.executable_name) in
   Arg.parse args anon usage;
   let log_db = ref [] in
   let log s = log_db := s :: !log_db in
@@ -507,5 +462,5 @@ let main ?(args=[]) ~name f =
     match exn with
     | Fatal_error msg ->
       eprintf "Error: %s\n%!" msg;
-      Caml.exit 1
+      exit 1
     | exn -> raise exn

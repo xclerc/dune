@@ -1,5 +1,3 @@
-open Base
-
 type t
 
 val create
@@ -29,9 +27,6 @@ module C_define : sig
       | Int
       | String
 
-    val sexp_of_t : t -> Sexp.t
-    val t_of_sexp : Sexp.t -> t
-
     val compare : t -> t -> int
   end
 
@@ -40,9 +35,6 @@ module C_define : sig
       | Switch of bool
       | Int    of int
       | String of string
-
-    val sexp_of_t : t -> Sexp.t
-    val t_of_sexp : Sexp.t -> t
 
     val compare : t -> t -> int
   end
@@ -99,7 +91,7 @@ end with type configurator := t
 
 (** Typical entry point for configurator programs *)
 val main
-  :  ?args:(Caml.Arg.key * Caml.Arg.spec * Caml.Arg.doc) list
+  :  ?args:(Arg.key * Arg.spec * Arg.doc) list
   -> name:string
   -> (t -> unit)
   -> unit
