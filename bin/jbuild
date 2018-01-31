@@ -1,5 +1,6 @@
 (executable
  ((name        main)
   (public_name jbuilder)
+  (package jbuilder)
   (libraries (unix jbuilder jbuilder_cmdliner))
   (preprocess no_preprocessing)))

@@ -16,7 +16,7 @@ end
 module OpamBaseParser = struct
   open OpamParserTypes
   let main _lex _lexbuf fn =
-    assert (fn = "jbuilder.opam");
+    assert (fn = "jbuilder.opam" || fn = "configurator.opam");
     { file_contents = []
     ; file_name     = fn
     }

@@ -19,6 +19,7 @@ for cmd in $CMDS; do
 
 (install
  ((section man)
+  (package jbuilder)
   (files (jbuilder-$cmd.1))))
 EOF
 done
