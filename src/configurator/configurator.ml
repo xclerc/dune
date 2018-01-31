@@ -2,8 +2,6 @@ open Jbuilder.Import
 module Io = Jbuilder.Io
 module Utils = Jbuilder.Utils
 
-module Sexp = Usexp
-
 let ( ^/ ) = Filename.concat
 
 exception Fatal_error of string
