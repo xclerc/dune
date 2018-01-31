@@ -31,6 +31,7 @@ external reraise : exn -> _ = "%reraise"
 (* To make bug reports usable *)
 let () = Printexc.record_backtrace true
 
+let eprintf = Printf.eprintf
 let sprintf = Printf.sprintf
 let ksprintf = Printf.ksprintf
 
@@ -232,6 +233,19 @@ module String_map = Map.Make(String)
 module String = struct
   include StringLabels
 
+  let is_empty = function
+    | "" -> true
+    | _ -> false
+
+  let exists s ~f =
+    try
+      for i=0 to String.length s - 1 do
+        if (f s.[i]) then raise_notrace Exit
+      done;
+      false
+    with Exit ->
+      true
+
   let break s ~pos =
     (sub s ~pos:0 ~len:pos,
      sub s ~pos ~len:(String.length s - pos))
@@ -300,6 +314,11 @@ module String = struct
       Some
         (sub s ~pos:0 ~len:i,
          sub s ~pos:(i + 1) ~len:(String.length s - i - 1))
+
+  let lsplit2_exn s ~on =
+    match lsplit2 s ~on with
+    | Some s -> s
+    | None -> invalid_arg "lsplit2_exn"
 
   let rsplit2 s ~on =
     match rindex s on with
@@ -372,6 +391,30 @@ module String = struct
       done;
       Bytes.unsafe_to_string b
     )
+
+  let split_lines s =
+    let rec loop ~last_is_cr ~acc i j =
+      if j = length s then (
+        let acc =
+          if j = i || (j = i + 1 && last_is_cr) then
+            acc
+          else
+            sub s ~pos:i ~len:(j - i) :: acc
+        in
+        List.rev acc
+      ) else
+        match s.[j] with
+        | '\r' -> loop ~last_is_cr:true ~acc i (j + 1)
+        | '\n' ->
+          let line =
+            let len = if last_is_cr then j - i - 1 else j - i in
+            sub s ~pos:i ~len
+          in
+          loop ~acc:(line :: acc) (j + 1) (j + 1) ~last_is_cr:false
+        | _ ->
+          loop ~acc i (j + 1) ~last_is_cr:false
+    in
+    loop ~acc:[] 0 0 ~last_is_cr:false
 end
 
 module Sys = struct
