@@ -283,20 +283,7 @@ let create ~(kind : Kind.t) ~path ~base_env ~env_extra ~name ~merlin
     >>= fun (findlib_path, ocamlc_config) ->
 
     let ocamlc_config =
-      List.map ocamlc_config ~f:(fun line ->
-        match String.index line ':' with
-        | Some i ->
-          (String.sub line ~pos:0 ~len:i,
-           String.sub line ~pos:(i + 2) ~len:(String.length line - i - 2))
-        | None ->
-          die "unrecognized line in the output of `%s`: %s" ocamlc_config_cmd
-            line)
-      |> String_map.of_alist
-      |> function
-      | Ok x -> x
-      | Error (key, _, _) ->
-        die "variable %S present twice in the output of `%s`" key ocamlc_config_cmd
-    in
+      Utils.parse_ocamlc_config ocamlc_config ~cmd:ocamlc_config_cmd in
     let get_opt var = String_map.find var ocamlc_config in
     let get ?default var =
       match get_opt var with

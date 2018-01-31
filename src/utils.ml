@@ -239,3 +239,18 @@ module Cached_digest = struct
                 });
     end
 end
+
+let parse_ocamlc_config lines ~cmd =
+  List.map lines ~f:(fun line ->
+    match String.index line ':' with
+    | Some i ->
+      (String.sub line ~pos:0 ~len:i,
+       String.sub line ~pos:(i + 2) ~len:(String.length line - i - 2))
+    | None ->
+      die "unrecognized line in the output of `%s`: %s" cmd
+        line)
+  |> String_map.of_alist
+  |> function
+  | Ok x -> x
+  | Error (key, _, _) ->
+    die "variable %S present twice in the output of `%s`" key cmd

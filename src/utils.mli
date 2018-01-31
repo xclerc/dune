@@ -65,3 +65,5 @@ module Cached_digest : sig
   val dump : unit -> unit
   val load : unit -> unit
 end
+
+val parse_ocamlc_config : string list -> cmd:string -> string String_map.t
