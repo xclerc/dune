@@ -6,6 +6,7 @@
 
 (install
  ((section man)
+  (package jbuilder)
   (files (jbuilder-build.1))))
 
 (rule
@@ -15,6 +16,7 @@
 
 (install
  ((section man)
+  (package jbuilder)
   (files (jbuilder-clean.1))))
 
 (rule
@@ -24,6 +26,7 @@
 
 (install
  ((section man)
+  (package jbuilder)
   (files (jbuilder-exec.1))))
 
 (rule
@@ -33,6 +36,7 @@
 
 (install
  ((section man)
+  (package jbuilder)
   (files (jbuilder-external-lib-deps.1))))
 
 (rule
@@ -42,6 +46,7 @@
 
 (install
  ((section man)
+  (package jbuilder)
   (files (jbuilder-install.1))))
 
 (rule
@@ -51,6 +56,7 @@
 
 (install
  ((section man)
+  (package jbuilder)
   (files (jbuilder-installed-libraries.1))))
 
 (rule
@@ -60,6 +66,7 @@
 
 (install
  ((section man)
+  (package jbuilder)
   (files (jbuilder-promote.1))))
 
 (rule
@@ -69,6 +76,7 @@
 
 (install
  ((section man)
+  (package jbuilder)
   (files (jbuilder-rules.1))))
 
 (rule
@@ -78,6 +86,7 @@
 
 (install
  ((section man)
+  (package jbuilder)
   (files (jbuilder-runtest.1))))
 
 (rule
@@ -87,6 +96,7 @@
 
 (install
  ((section man)
+  (package jbuilder)
   (files (jbuilder-subst.1))))
 
 (rule
@@ -96,6 +106,7 @@
 
 (install
  ((section man)
+  (package jbuilder)
   (files (jbuilder-uninstall.1))))
 
 (rule
@@ -105,5 +116,6 @@
 
 (install
  ((section man)
+  (package jbuilder)
   (files (jbuilder-utop.1))))
 
