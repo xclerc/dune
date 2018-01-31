@@ -1,8 +1,8 @@
 (library
- ((name        configurator)
-  (public_name configurator)
+ ((name configurator)
+  (public_name jbuilder.configurator)
   (flags (:standard -safe-string))
-  (libraries (usexp jbuilder))
+  (libraries (jbuilder))
   (preprocess no_preprocessing)))
 
 (jbuild_version 1)
