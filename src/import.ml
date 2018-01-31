@@ -344,6 +344,7 @@ module String = struct
     in
     loop 0 0
 
+  [@@@ocaml.warning "-32"] (* to make bootstrap work *)
   let split_lines s =
     let rec loop ~last_is_cr ~acc i j =
       if j = length s then (
