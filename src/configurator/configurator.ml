@@ -321,11 +321,11 @@ module C_define = struct
     | Ok exe ->
       run_capture_exn t ~dir:(Filename.dirname exe) (command_line exe [])
       |> String.split_lines
-      |> List.map ~f:(fun s : (string * Value.t) ->
+      |> List.map ~f:(fun s ->
         let var, data = String.lsplit2_exn s ~on:'=' in
         (var,
          match String.lsplit2_exn data ~on:':' with
-         | "b", s -> Switch (bool_of_string s)
+         | "b", s -> Value.Switch (bool_of_string s)
          | "i", s -> Int    (int_of_string s)
          | "s", s -> String s
          | _ -> assert false))

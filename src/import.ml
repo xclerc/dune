@@ -647,3 +647,11 @@ module Fmt = struct
 
   let failwith fmt = kstrf failwith fmt
 end
+
+module Char = struct
+  include struct
+    [@@@warning "-3"]
+    let uppercase_ascii    = Char.uppercase
+    let lowercase_ascii    = Char.lowercase
+  end
+end
