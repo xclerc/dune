@@ -1,60 +1,54 @@
 open Import
 
-module Preds : sig
+module Interned(M : sig end) : sig
   type t
 
-  val make : string list -> t
-  val count : t -> int
-  val is_subset : t -> subset:t -> bool
-  val intersects : t -> t -> bool
+  val make : string -> t
+  val compare : t -> t -> int
 end = struct
-  type t = string list
+  type t = int
 
-  let make l = List.sort l ~cmp:String.compare
+  let compare : int -> int -> int = compare
 
-  let count = List.length
+  let table = Hashtbl.create 1024
+  let next = ref 0
 
-  let rec is_subset t ~subset =
-    match t, subset with
-    | _, [] -> true
-    | [], _ :: _ -> false
-    | x1 :: l1, x2 :: l2 ->
-      let d = String.compare x1 x2 in
-      if d = 0 then
-        is_subset l1 ~subset:l2
-      else if d < 0 then
-        is_subset l1 ~subset
-      else
-        false
+  let of_string s =
+    Hashtbl.find_or_add table s ~f:(fun x ->
+      let n = !next in
+      next := n + 1;
+      n)
+end
 
-  let rec intersects a b =
-    match a, b with
-    | [], _ | _, [] -> false
-    | x1 :: l1, x2 :: l2 ->
-      let d = String.compare x1 x2 in
-      if d = 0 then
-        true
-      else if d < 0 then
-        intersects l1 b
-      else
-        intersects a l2
+module Predicate = struct
+  include Interned(struct end)
+
+  let ppx_driver = make "ppx_driver"
+  let mt         = make "mt"
+  let mt_posix   = make "mt_posix"
+end
+
+module P = Predicate
+module Ps = struct
+  include Set.Make(P)
+
+  let make strings = of_list (List.map strings ~f:P.create)
 end
 
 (* An assignment or addition *)
 module Rule = struct
   type t =
-    { preds_required  : Preds.t
-    ; preds_forbidden : Preds.t
+    { preds_required  : Ps.t
+    ; preds_forbidden : Ps.t
     ; value           : string
     }
 
   let formal_predicates_count t =
-    Preds.count t.preds_required + Preds.count t.preds_forbidden
+    Ps.count t.preds_required + Ps.count t.preds_forbidden
 
   let matches t ~preds =
-    Preds.is_subset preds ~subset:t.preds_required &&
-    not (Preds.intersects preds t.preds_forbidden)
-
+    Ps.subset t.preds_required preds &&
+    not (Ps.is_empty (Ps.inter preds t.preds_forbidden))
 
   let make (rule : Meta.rule) =
     let preds_required, preds_forbidden =
@@ -62,8 +56,8 @@ module Rule = struct
         | Pos x -> Inl x
         | Neg x -> Inr x)
     in
-    { preds_required  = Preds.make preds_required
-    ; preds_forbidden = Preds.make preds_forbidden
+    { preds_required  = Ps.make preds_required
+    ; preds_forbidden = Ps.make preds_forbidden
     ; value           = rule.value
     }
 end
@@ -110,7 +104,7 @@ module Vars = struct
   type t = Rules.t String_map.t
 
   let get (t : t) var preds =
-    let preds = Preds.make preds in
+    let preds = Ps.make preds in
     match String_map.find var t with
     | None -> ""
     | Some rules -> Rules.interpret rules ~preds
@@ -121,7 +115,7 @@ end
 module Config = struct
   type t =
     { vars  : Vars.t
-    ; preds : string list
+    ; preds : Ps.t
     }
 
   let load path ~toolchain ~context =
@@ -135,7 +129,9 @@ module Config = struct
                      ; entries = Meta.load (Path.to_string conf_file)
                      }).vars
     in
-    { vars = String_map.map vars ~f:Rules.of_meta_rules; preds = [toolchain] }
+    { vars = String_map.map vars ~f:Rules.of_meta_rules
+    ; preds = Ps.make [toolchain]
+    }
 
   let get { vars; preds } var =
     Vars.get vars var preds
@@ -299,7 +295,7 @@ let parse_package t ~name ~parent_dir ~vars ~required_by =
         ~f:(Path.relative dir))
   in
   let jsoo_runtime = Vars.get_words vars "jsoo_runtime" [] in
-  let preds = ["ppx_driver"; "mt"; "mt_posix"] in
+  let preds = [P.ppx_driver; P.mt; P.mt_posix] in
   let pkg =
     { name
     ; dir
