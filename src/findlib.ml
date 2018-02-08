@@ -64,11 +64,13 @@ end
 
 (* Set of rules for a given variable of a package *)
 module Rules = struct
-  (* To implement the algorithm described in [1], [set_rules] is sorted by decreasing
-     number of formal predicates, then according to the order of the META
-     file. [add_rules] are in the same order as in the META file.
+  (* To implement the algorithm described in [1], [set_rules] is
+     sorted by decreasing number of formal predicates, then according
+     to the order of the META file. [add_rules] are in the same order
+     as in the META file.
 
-     [1] http://projects.camlcity.org/projects/dl/findlib-1.6.3/doc/ref-html/r729.html *)
+     [1] http://projects.camlcity.org/projects/dl/findlib-1.6.3/doc/ref-html/r729.html
+     *)
   type t =
     { set_rules : Rule.t list
     ; add_rules : Rule.t list
@@ -137,35 +139,6 @@ module Config = struct
     Vars.get vars var preds
 end
 
-module Package = struct
-  type t =
-    { name             : string
-    ; dir              : Path.t
-    ; version          : string
-    ; description      : string
-    ; archives         : Path.t list Mode.Dict.t
-    ; plugins          : Path.t list Mode.Dict.t
-    ; jsoo_runtime     : string list
-    ; requires         : t list
-    ; ppx_runtime_deps : t list
-    }
-
-  let name        t = t.name
-  let dir         t = t.dir
-  let version     t = t.version
-  let description t = t.description
-
-  let archives t mode = Mode.Dict.get t.archives mode
-  let plugins  t mode = Mode.Dict.get t.plugins  mode
-
-  let jsoo_runtime t = t.jsoo_runtime
-
-  let requires         t = t.requires
-  let ppx_runtime_deps t = t.ppx_runtime_deps
-end
-
-open Package
-
 module Package_not_available = struct
   type t =
     { package     : string
@@ -229,6 +202,41 @@ module Package_not_available = struct
              Format.fprintf ppf "%s" t.package;
              List.iter rest ~f:(fun t ->
                Format.fprintf ppf ",@ %s" t.package))
+end
+
+module Package = struct
+  type t =
+    { name             : string
+    ; dir              : Path.t
+    ; version          : string
+    ; description      : string
+    ; archives         : Path.t list Mode.Dict.t
+    ; plugins          : Path.t list Mode.Dict.t
+    ; jsoo_runtime     : string list
+    ; mutable requires         : t list
+    ; mutable ppx_runtime_deps : t list
+    }
+
+  (* [Raw] is what was read from the META file. [Loaded] is obtained
+     by resolving package names. The closure is not taken at this
+     point, so when switching from [Raw] to [Loaded] the two lists are
+     of the same length. *)
+  and deps =
+    | Raw    of string list
+    | Loaded of (t, Package_not_available.t) result list
+
+  let name        t = t.name
+  let dir         t = t.dir
+  let version     t = t.version
+  let description t = t.description
+
+  let archives t mode = Mode.Dict.get t.archives mode
+  let plugins  t mode = Mode.Dict.get t.plugins  mode
+
+  let jsoo_runtime t = t.jsoo_runtime
+
+  let requires         t = t.requires
+  let ppx_runtime_deps t = t.ppx_runtime_deps
 end
 
 type present_or_not_available =
